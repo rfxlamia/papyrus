@@ -1,0 +1,23 @@
+{
+  "pages": [
+    {
+      "page_number": 0,
+      "blocks": [
+        {
+          "text": "Chapter 1",
+          "font_name": "Helvetica",
+          "font_size": 24.0,
+          "is_bold": false,
+          "is_italic": false
+        },
+        {
+          "text": "Body text.",
+          "font_name": "Helvetica",
+          "font_size": 12.0,
+          "is_bold": false,
+          "is_italic": false
+        }
+      ]
+    }
+  ]
+}
