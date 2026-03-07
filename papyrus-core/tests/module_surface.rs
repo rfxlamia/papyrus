@@ -15,8 +15,22 @@ fn module_surfaces_are_linked() {
     let markdown = renderer::render_markdown(&detected);
     assert!(markdown.is_empty());
 
-    // warnings may or may not be empty depending on implementation
-    let _ = warnings;
+    // Incomplete PDF header may produce MalformedPdfObject warnings once
+    // parse_pdf is fully wired — assert shape is valid if any exist.
+    for w in &warnings {
+        // All warnings must be one of the known Warning variants
+        match w {
+            papyrus_core::ast::Warning::MalformedPdfObject { detail } => {
+                assert!(
+                    !detail.is_empty(),
+                    "MalformedPdfObject detail must not be empty"
+                );
+            }
+            papyrus_core::ast::Warning::MissingFontMetrics { .. }
+            | papyrus_core::ast::Warning::UnreadableTextStream { .. }
+            | papyrus_core::ast::Warning::UnsupportedEncoding { .. } => {}
+        }
+    }
 }
 
 #[test]

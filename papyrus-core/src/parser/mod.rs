@@ -73,15 +73,41 @@ pub fn resolve_fonts_for_page(
 
     // Get the page ObjectId from the 1-based page number
     let pages = doc.get_pages();
-    let page_id = match pages.get(&(page_number as u32)) {
+    let page_num_u32 = match u32::try_from(page_number) {
+        Ok(n) => n,
+        Err(_) => {
+            warnings.push(Warning::MalformedPdfObject {
+                detail: format!("page number {} exceeds u32 range", page_number),
+            });
+            return (fonts, warnings);
+        }
+    };
+    let page_id = match pages.get(&page_num_u32) {
         Some(id) => *id,
-        None => return (fonts, warnings),
+        None => {
+            warnings.push(Warning::MalformedPdfObject {
+                detail: format!(
+                    "page {} not found (document has {} pages)",
+                    page_number,
+                    pages.len()
+                ),
+            });
+            return (fonts, warnings);
+        }
     };
 
     // Use lopdf's built-in font resolution
     let page_fonts = match doc.get_page_fonts(page_id) {
         Ok(f) => f,
-        Err(_) => return (fonts, warnings),
+        Err(e) => {
+            warnings.push(Warning::MalformedPdfObject {
+                detail: format!(
+                    "failed to read font resources for page {}: {}",
+                    page_number, e
+                ),
+            });
+            return (fonts, warnings);
+        }
     };
 
     for (resource_name, font_dict) in page_fonts {
@@ -109,29 +135,16 @@ pub fn resolve_fonts_for_page(
             }
         };
 
-        // Try to extract font size from FontDescriptor (optional/diagnostic only)
-        let descriptor_size = font_dict
-            .get(b"FontDescriptor")
-            .ok()
-            .and_then(|obj| {
-                // Dereference if it's a reference
-                match obj {
-                    lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
-                    _ => Some(obj),
-                }
-            })
-            .and_then(|obj| obj.as_dict().ok())
-            .and_then(|desc| {
-                // Try to get a representative size from the descriptor
-                // (this is diagnostic only; Tf state is authoritative for font_size)
-                desc.get(b"FontSize").ok().and_then(|o| o.as_float().ok())
-            });
+        // Note: FontInfo.size is diagnostic only — Tf state is authoritative for
+        // RawTextSegment.font_size. Standard PDF font descriptors don't carry a
+        // /FontSize key, so we leave this as None. It may be populated by future
+        // heuristics if needed.
 
         fonts.insert(
             resource_name,
             FontInfo {
                 name: base_font_name,
-                size: descriptor_size,
+                size: None,
             },
         );
     }
@@ -169,7 +182,6 @@ pub fn parse_pdf(bytes: &[u8]) -> (Vec<RawTextSegment>, DocumentMetadata, Vec<Wa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Warning;
     use std::path::PathBuf;
 
     /// Helper to resolve fixture paths relative to the workspace root.
@@ -315,22 +327,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_fonts_for_page_strips_subset_prefix() {
-        // Subset prefixes are 6 uppercase letters followed by +
-        // Our fixtures may or may not have them, but if they do, names should be stripped.
-        let doc = load_fixture("simple.pdf");
-        let (fonts, _) = resolve_fonts_for_page(&doc, 1);
-        for fi in fonts.values() {
-            // No font name should start with a 6-uppercase-letter prefix
-            assert!(
-                !has_subset_prefix(&fi.name),
-                "font name should have subset prefix stripped: {}",
-                fi.name
-            );
-        }
-    }
-
-    #[test]
     fn resolve_fonts_for_page_preserves_resource_names_as_keys() {
         let doc = load_fixture("simple.pdf");
         let (fonts, _) = resolve_fonts_for_page(&doc, 1);
@@ -343,12 +339,44 @@ mod tests {
         }
     }
 
-    /// Check if a font name has a subset prefix (6 uppercase ASCII letters + '+')
-    fn has_subset_prefix(name: &str) -> bool {
-        if name.len() < 7 {
-            return false;
-        }
-        let prefix = &name[..7];
-        prefix.ends_with('+') && prefix[..6].chars().all(|c| c.is_ascii_uppercase())
+    // ── strip_subset_prefix direct tests ──
+
+    #[test]
+    fn strip_subset_prefix_strips_valid_prefix() {
+        assert_eq!(
+            strip_subset_prefix("ABCDEF+Helvetica-Bold"),
+            "Helvetica-Bold"
+        );
+    }
+
+    #[test]
+    fn strip_subset_prefix_strips_any_six_uppercase_letters() {
+        assert_eq!(strip_subset_prefix("ZZZZZZ+TimesNewRoman"), "TimesNewRoman");
+    }
+
+    #[test]
+    fn strip_subset_prefix_leaves_non_prefixed_name() {
+        assert_eq!(strip_subset_prefix("Helvetica"), "Helvetica");
+    }
+
+    #[test]
+    fn strip_subset_prefix_leaves_short_names() {
+        assert_eq!(strip_subset_prefix("AB+X"), "AB+X");
+    }
+
+    #[test]
+    fn strip_subset_prefix_leaves_lowercase_prefix() {
+        // Lowercase letters before + don't match the subset pattern
+        assert_eq!(strip_subset_prefix("abcdef+Font"), "abcdef+Font");
+    }
+
+    #[test]
+    fn strip_subset_prefix_leaves_mixed_case_prefix() {
+        assert_eq!(strip_subset_prefix("ABCDEf+Font"), "ABCDEf+Font");
+    }
+
+    #[test]
+    fn strip_subset_prefix_leaves_empty_string() {
+        assert_eq!(strip_subset_prefix(""), "");
     }
 }
