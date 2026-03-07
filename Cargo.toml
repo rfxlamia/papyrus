@@ -1,0 +1,3 @@
+[workspace]
+members = ["papyrus-core", "papyrus-cli"]
+resolver = "2"
