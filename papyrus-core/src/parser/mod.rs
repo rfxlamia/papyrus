@@ -613,6 +613,80 @@ mod tests {
         }
     }
 
+    // ── decode_pdf_string tests ──
+
+    #[test]
+    fn decode_pdf_string_winansi_ascii() {
+        // Pure ASCII bytes should decode to the same string
+        let result = decode_pdf_string(b"Hello World");
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn decode_pdf_string_winansi_latin1_non_ascii() {
+        // Latin-1 bytes: é (0xE9), ü (0xFC), ñ (0xF1)
+        let result = decode_pdf_string(&[0xE9, 0xFC, 0xF1]);
+        assert_eq!(result, "\u{00E9}\u{00FC}\u{00F1}");
+        assert!(
+            !result.contains(char::REPLACEMENT_CHARACTER),
+            "valid WinAnsi should not produce replacement chars"
+        );
+    }
+
+    #[test]
+    fn decode_pdf_string_utf16be_with_bom() {
+        // UTF-16BE BOM (FE FF) followed by "Hi" (0x0048 0x0069)
+        let bytes = [0xFE, 0xFF, 0x00, 0x48, 0x00, 0x69];
+        let result = decode_pdf_string(&bytes);
+        assert_eq!(result, "Hi");
+        assert!(
+            !result.contains(char::REPLACEMENT_CHARACTER),
+            "valid UTF-16BE should not produce replacement chars"
+        );
+    }
+
+    #[test]
+    fn decode_pdf_string_utf16be_without_bom() {
+        // UTF-16BE without BOM: starts with 0x00 and even length
+        // "AB" = 0x0041 0x0042
+        let bytes = [0x00, 0x41, 0x00, 0x42];
+        let result = decode_pdf_string(&bytes);
+        assert_eq!(result, "AB");
+    }
+
+    #[test]
+    fn decode_pdf_string_utf16be_with_non_ascii() {
+        // UTF-16BE BOM + "café" = c(0x0063) a(0x0061) f(0x0066) é(0x00E9)
+        let bytes = [0xFE, 0xFF, 0x00, 0x63, 0x00, 0x61, 0x00, 0x66, 0x00, 0xE9];
+        let result = decode_pdf_string(&bytes);
+        assert_eq!(result, "caf\u{00E9}");
+    }
+
+    #[test]
+    fn decode_pdf_string_empty_bytes() {
+        let result = decode_pdf_string(b"");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn decode_pdf_string_single_byte_not_utf16() {
+        // Single byte can't be UTF-16BE — should fallback to WinAnsi
+        let result = decode_pdf_string(&[0x41]);
+        assert_eq!(result, "A");
+    }
+
+    #[test]
+    fn decode_utf16be_invalid_surrogate_uses_replacement() {
+        // Unpaired high surrogate: 0xD800
+        let bytes = [0xD8, 0x00];
+        let result = decode_utf16be(&bytes);
+        assert!(
+            result.contains(char::REPLACEMENT_CHARACTER),
+            "invalid surrogate should produce replacement char, got: {:?}",
+            result
+        );
+    }
+
     // ── strip_subset_prefix direct tests ──
 
     #[test]
