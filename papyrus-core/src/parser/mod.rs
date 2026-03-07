@@ -152,10 +152,63 @@ pub fn resolve_fonts_for_page(
     (fonts, warnings)
 }
 
+/// WinAnsiEncoding lookup table for bytes 0x80–0x9F.
+///
+/// These bytes differ from ISO-8859-1: WinAnsi maps them to printable characters
+/// (smart quotes, em dashes, euro sign, etc.) while ISO-8859-1 maps them to C1
+/// control characters. PDF spec §D.1 defines this mapping.
+///
+/// Index 0 = byte 0x80, index 31 = byte 0x9F.
+const WINANSI_0X80_TO_0X9F: [char; 32] = [
+    '\u{20AC}', // 0x80 — Euro sign
+    '\u{FFFD}', // 0x81 — undefined, use replacement
+    '\u{201A}', // 0x82 — Single Low-9 Quotation Mark
+    '\u{0192}', // 0x83 — Latin Small Letter F With Hook
+    '\u{201E}', // 0x84 — Double Low-9 Quotation Mark
+    '\u{2026}', // 0x85 — Horizontal Ellipsis
+    '\u{2020}', // 0x86 — Dagger
+    '\u{2021}', // 0x87 — Double Dagger
+    '\u{02C6}', // 0x88 — Modifier Letter Circumflex Accent
+    '\u{2030}', // 0x89 — Per Mille Sign
+    '\u{0160}', // 0x8A — Latin Capital Letter S With Caron
+    '\u{2039}', // 0x8B — Single Left-Pointing Angle Quotation Mark
+    '\u{0152}', // 0x8C — Latin Capital Ligature OE
+    '\u{FFFD}', // 0x8D — undefined, use replacement
+    '\u{017D}', // 0x8E — Latin Capital Letter Z With Caron
+    '\u{FFFD}', // 0x8F — undefined, use replacement
+    '\u{FFFD}', // 0x90 — undefined, use replacement
+    '\u{2018}', // 0x91 — Left Single Quotation Mark
+    '\u{2019}', // 0x92 — Right Single Quotation Mark
+    '\u{201C}', // 0x93 — Left Double Quotation Mark
+    '\u{201D}', // 0x94 — Right Double Quotation Mark
+    '\u{2022}', // 0x95 — Bullet
+    '\u{2013}', // 0x96 — En Dash
+    '\u{2014}', // 0x97 — Em Dash
+    '\u{02DC}', // 0x98 — Small Tilde
+    '\u{2122}', // 0x99 — Trade Mark Sign
+    '\u{0161}', // 0x9A — Latin Small Letter S With Caron
+    '\u{203A}', // 0x9B — Single Right-Pointing Angle Quotation Mark
+    '\u{0153}', // 0x9C — Latin Small Ligature OE
+    '\u{FFFD}', // 0x9D — undefined, use replacement
+    '\u{017E}', // 0x9E — Latin Small Letter Z With Caron
+    '\u{0178}', // 0x9F — Latin Capital Letter Y With Diaeresis
+];
+
+/// Decode a single byte using WinAnsiEncoding.
+fn winansi_byte_to_char(b: u8) -> char {
+    if b < 0x80 {
+        b as char
+    } else if b <= 0x9F {
+        WINANSI_0X80_TO_0X9F[(b - 0x80) as usize]
+    } else {
+        // 0xA0–0xFF: same as ISO-8859-1 (direct Unicode codepoint)
+        b as char
+    }
+}
+
 /// Decode raw PDF string bytes to UTF-8.
 ///
-/// Handles UTF-16BE (with or without BOM) and falls back to WinAnsi/Latin-1.
-/// Emits `Warning::UnsupportedEncoding` only on truly unknown encodings (not in this phase).
+/// Handles UTF-16BE (with or without BOM) and falls back to WinAnsiEncoding.
 fn decode_pdf_string(bytes: &[u8]) -> String {
     // Check for UTF-16BE BOM (0xFE 0xFF)
     if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
@@ -163,14 +216,16 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
         return decode_utf16be(&bytes[2..]);
     }
 
-    // Check for UTF-16BE without BOM: heuristic — if first byte is 0x00 and
-    // length is even, it's likely UTF-16BE (common in CIDFont text)
+    // Heuristic for UTF-16BE without BOM: if first byte is 0x00 and length is even,
+    // it's likely UTF-16BE (common in CIDFont text). Note: per PDF spec §7.9.2.2,
+    // UTF-16BE is formally identified only by the BOM. This heuristic is a pragmatic
+    // best-effort for spec-violating PDFs.
     if bytes.len() >= 2 && bytes.len() % 2 == 0 && bytes[0] == 0x00 {
         return decode_utf16be(bytes);
     }
 
-    // Default: WinAnsi / Latin-1 (ISO 8859-1) — each byte maps directly to a Unicode codepoint
-    bytes.iter().map(|&b| b as char).collect()
+    // Default: WinAnsiEncoding (PDF spec §D.1)
+    bytes.iter().map(|&b| winansi_byte_to_char(b)).collect()
 }
 
 /// Decode UTF-16BE bytes into a String.
@@ -222,6 +277,7 @@ pub fn extract_text_segments_for_page(
     let mut current_font_resource: Option<Vec<u8>> = None;
     let mut current_font_size: Option<f32> = None;
     let mut tf_set_in_text_object = false;
+    let mut warned_no_tf = false;
 
     for op in content.operations.iter() {
         match op.operator.as_str() {
@@ -230,12 +286,14 @@ pub fn extract_text_segments_for_page(
                 current_font_resource = None;
                 current_font_size = None;
                 tf_set_in_text_object = false;
+                warned_no_tf = false;
             }
             "ET" => {
                 // End text object — reset state
                 current_font_resource = None;
                 current_font_size = None;
                 tf_set_in_text_object = false;
+                warned_no_tf = false;
             }
             "Tf" => {
                 // Set font: operands are [Name, Number]
@@ -258,6 +316,7 @@ pub fn extract_text_segments_for_page(
                             &current_font_resource,
                             current_font_size,
                             tf_set_in_text_object,
+                            &mut warned_no_tf,
                             page_number,
                             &mut warnings,
                         );
@@ -285,6 +344,7 @@ pub fn extract_text_segments_for_page(
                             &current_font_resource,
                             current_font_size,
                             tf_set_in_text_object,
+                            &mut warned_no_tf,
                             page_number,
                             &mut warnings,
                         );
@@ -307,11 +367,12 @@ pub fn extract_text_segments_for_page(
 }
 
 /// Extract font resource name or defaults if Tf not yet set.
-/// Emits a warning on first use without Tf.
+/// Emits at most one warning per text object when Tf is missing (per plan §5).
 fn get_text_state_or_default(
     current_font_resource: &Option<Vec<u8>>,
     current_font_size: Option<f32>,
     tf_set: bool,
+    warned_no_tf: &mut bool,
     page_number: usize,
     warnings: &mut Vec<Warning>,
 ) -> (Vec<u8>, f32) {
@@ -323,9 +384,12 @@ fn get_text_state_or_default(
             current_font_size.unwrap_or(0.0),
         )
     } else {
-        warnings.push(Warning::MalformedPdfObject {
-            detail: format!("text state not set before Tj/TJ on page {}", page_number),
-        });
+        if !*warned_no_tf {
+            warnings.push(Warning::MalformedPdfObject {
+                detail: format!("text state not set before Tj/TJ on page {}", page_number),
+            });
+            *warned_no_tf = true;
+        }
         (b"<unknown>".to_vec(), 0.0)
     }
 }
@@ -399,6 +463,7 @@ pub fn parse_pdf(bytes: &[u8]) -> (Vec<RawTextSegment>, DocumentMetadata, Vec<Wa
     page_numbers.sort();
 
     for &page_num in &page_numbers {
+        // Safe: u32 -> usize is always widening on 32-bit+ platforms
         let page_number = page_num as usize;
 
         // Resolve fonts for this page
@@ -434,31 +499,25 @@ fn extract_doc_info(doc: &lopdf::Document) -> (Option<String>, Option<String>) {
         None => return (None, None),
     };
 
-    let title = info.get(b"Title").ok().and_then(|obj| match obj {
-        lopdf::Object::String(bytes, _) => {
-            let s = decode_pdf_string(bytes);
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        _ => None,
-    });
-
-    let author = info.get(b"Author").ok().and_then(|obj| match obj {
-        lopdf::Object::String(bytes, _) => {
-            let s = decode_pdf_string(bytes);
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        _ => None,
-    });
+    let title = get_info_string(info, b"Title");
+    let author = get_info_string(info, b"Author");
 
     (title, author)
+}
+
+/// Extract a non-empty string value from a PDF info dictionary.
+fn get_info_string(info: &lopdf::Dictionary, key: &[u8]) -> Option<String> {
+    info.get(key).ok().and_then(|obj| match obj {
+        lopdf::Object::String(bytes, _) => {
+            let s = decode_pdf_string(bytes);
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -703,6 +762,76 @@ mod tests {
         }
     }
 
+    // ── get_text_state_or_default tests ──
+
+    #[test]
+    fn get_text_state_or_default_with_tf_set_returns_current_state() {
+        let font_res = Some(b"F1".to_vec());
+        let mut warned = false;
+        let mut warnings = Vec::new();
+        let (res, size) =
+            get_text_state_or_default(&font_res, Some(12.0), true, &mut warned, 1, &mut warnings);
+        assert_eq!(res, b"F1");
+        assert_eq!(size, 12.0);
+        assert!(
+            warnings.is_empty(),
+            "should not emit warning when Tf is set"
+        );
+        assert!(!warned, "warned flag should remain false");
+    }
+
+    #[test]
+    fn get_text_state_or_default_without_tf_returns_defaults_and_warns_once() {
+        let mut warned = false;
+        let mut warnings = Vec::new();
+
+        // First call: should emit warning
+        let (res1, size1) =
+            get_text_state_or_default(&None, None, false, &mut warned, 1, &mut warnings);
+        assert_eq!(res1, b"<unknown>");
+        assert_eq!(size1, 0.0);
+        assert_eq!(warnings.len(), 1, "should emit exactly one warning");
+        match &warnings[0] {
+            Warning::MalformedPdfObject { detail } => {
+                assert!(detail.contains("text state not set before Tj/TJ"));
+            }
+            other => panic!("expected MalformedPdfObject, got {:?}", other),
+        }
+        assert!(warned, "warned flag should be set after first call");
+
+        // Second call: should NOT emit another warning (plan §5: "emit one")
+        let (res2, size2) =
+            get_text_state_or_default(&None, None, false, &mut warned, 1, &mut warnings);
+        assert_eq!(res2, b"<unknown>");
+        assert_eq!(size2, 0.0);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "should still have exactly one warning after second call"
+        );
+    }
+
+    #[test]
+    fn get_text_state_or_default_warned_resets_across_text_objects() {
+        let mut warned = false;
+        let mut warnings = Vec::new();
+
+        // First text object: emit one warning
+        get_text_state_or_default(&None, None, false, &mut warned, 1, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+
+        // Simulate BT: reset warned flag (caller is responsible for this)
+        warned = false;
+
+        // Second text object: should emit another warning
+        get_text_state_or_default(&None, None, false, &mut warned, 1, &mut warnings);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "should have two warnings for two separate text objects"
+        );
+    }
+
     // ── parse_pdf tests ──
 
     #[test]
@@ -846,14 +975,28 @@ mod tests {
     }
 
     #[test]
-    fn decode_pdf_string_winansi_latin1_non_ascii() {
-        // Latin-1 bytes: é (0xE9), ü (0xFC), ñ (0xF1)
+    fn decode_pdf_string_winansi_high_latin_range() {
+        // Bytes 0xA0+: same as Latin-1 — é (0xE9), ü (0xFC), ñ (0xF1)
         let result = decode_pdf_string(&[0xE9, 0xFC, 0xF1]);
         assert_eq!(result, "\u{00E9}\u{00FC}\u{00F1}");
         assert!(
             !result.contains(char::REPLACEMENT_CHARACTER),
-            "valid WinAnsi should not produce replacement chars"
+            "valid WinAnsi high-latin should not produce replacement chars"
         );
+    }
+
+    #[test]
+    fn decode_pdf_string_winansi_0x80_to_0x9f_range() {
+        // 0x80 = € (U+20AC), 0x93 = " (U+201C), 0x96 = – (U+2013), 0x97 = — (U+2014)
+        let result = decode_pdf_string(&[0x80, 0x93, 0x96, 0x97]);
+        assert_eq!(result, "\u{20AC}\u{201C}\u{2013}\u{2014}");
+    }
+
+    #[test]
+    fn decode_pdf_string_winansi_undefined_bytes_use_replacement() {
+        // 0x81 and 0x8D are undefined in WinAnsi — should produce replacement chars
+        let result = decode_pdf_string(&[0x81, 0x8D]);
+        assert_eq!(result, "\u{FFFD}\u{FFFD}");
     }
 
     #[test]
@@ -908,6 +1051,34 @@ mod tests {
             "invalid surrogate should produce replacement char, got: {:?}",
             result
         );
+    }
+
+    // ── winansi_byte_to_char tests ──
+
+    #[test]
+    fn winansi_byte_to_char_ascii_range() {
+        assert_eq!(winansi_byte_to_char(0x41), 'A');
+        assert_eq!(winansi_byte_to_char(0x20), ' ');
+        assert_eq!(winansi_byte_to_char(0x7F), '\x7F');
+    }
+
+    #[test]
+    fn winansi_byte_to_char_special_range() {
+        assert_eq!(winansi_byte_to_char(0x80), '\u{20AC}'); // Euro
+        assert_eq!(winansi_byte_to_char(0x91), '\u{2018}'); // Left single quote
+        assert_eq!(winansi_byte_to_char(0x92), '\u{2019}'); // Right single quote
+        assert_eq!(winansi_byte_to_char(0x93), '\u{201C}'); // Left double quote
+        assert_eq!(winansi_byte_to_char(0x94), '\u{201D}'); // Right double quote
+        assert_eq!(winansi_byte_to_char(0x96), '\u{2013}'); // En dash
+        assert_eq!(winansi_byte_to_char(0x97), '\u{2014}'); // Em dash
+        assert_eq!(winansi_byte_to_char(0x99), '\u{2122}'); // TM
+    }
+
+    #[test]
+    fn winansi_byte_to_char_high_latin_range() {
+        assert_eq!(winansi_byte_to_char(0xA0), '\u{00A0}'); // NBSP
+        assert_eq!(winansi_byte_to_char(0xE9), '\u{00E9}'); // é
+        assert_eq!(winansi_byte_to_char(0xFF), '\u{00FF}'); // ÿ
     }
 
     // ── strip_subset_prefix direct tests ──

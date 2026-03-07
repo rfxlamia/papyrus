@@ -1,0 +1,2 @@
+# Treat PDF fixtures as binary to avoid noisy diffs
+*.pdf binary
