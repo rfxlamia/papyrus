@@ -48,14 +48,95 @@ pub fn load_pdf(bytes: &[u8]) -> (Option<lopdf::Document>, Vec<Warning>) {
     }
 }
 
+/// Strip a 6-uppercase-letter subset prefix (e.g., "ABCDEF+Helvetica-Bold" -> "Helvetica-Bold").
+fn strip_subset_prefix(name: &str) -> &str {
+    if name.len() >= 7
+        && name.as_bytes()[6] == b'+'
+        && name[..6].bytes().all(|b| b.is_ascii_uppercase())
+    {
+        &name[7..]
+    } else {
+        name
+    }
+}
+
 /// Resolve font dictionaries for a given page.
 ///
 /// Returns a map of font resource name (e.g., b"F1") to FontInfo, plus any warnings.
+/// `page_number` is 1-based.
 pub fn resolve_fonts_for_page(
-    _doc: &lopdf::Document,
-    _page_number: usize,
+    doc: &lopdf::Document,
+    page_number: usize,
 ) -> (HashMap<Vec<u8>, FontInfo>, Vec<Warning>) {
-    (HashMap::new(), Vec::new())
+    let mut fonts = HashMap::new();
+    let mut warnings = Vec::new();
+
+    // Get the page ObjectId from the 1-based page number
+    let pages = doc.get_pages();
+    let page_id = match pages.get(&(page_number as u32)) {
+        Some(id) => *id,
+        None => return (fonts, warnings),
+    };
+
+    // Use lopdf's built-in font resolution
+    let page_fonts = match doc.get_page_fonts(page_id) {
+        Ok(f) => f,
+        Err(_) => return (fonts, warnings),
+    };
+
+    for (resource_name, font_dict) in page_fonts {
+        // Extract BaseFont name
+        let base_font_name = match font_dict.get(b"BaseFont") {
+            Ok(obj) => match obj.as_name() {
+                Ok(name_bytes) => {
+                    let raw_name = String::from_utf8_lossy(name_bytes).to_string();
+                    strip_subset_prefix(&raw_name).to_string()
+                }
+                Err(_) => {
+                    warnings.push(Warning::MissingFontMetrics {
+                        font_name: "<unknown>".to_string(),
+                        page: page_number,
+                    });
+                    continue;
+                }
+            },
+            Err(_) => {
+                warnings.push(Warning::MissingFontMetrics {
+                    font_name: "<unknown>".to_string(),
+                    page: page_number,
+                });
+                continue;
+            }
+        };
+
+        // Try to extract font size from FontDescriptor (optional/diagnostic only)
+        let descriptor_size = font_dict
+            .get(b"FontDescriptor")
+            .ok()
+            .and_then(|obj| {
+                // Dereference if it's a reference
+                match obj {
+                    lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
+                    _ => Some(obj),
+                }
+            })
+            .and_then(|obj| obj.as_dict().ok())
+            .and_then(|desc| {
+                // Try to get a representative size from the descriptor
+                // (this is diagnostic only; Tf state is authoritative for font_size)
+                desc.get(b"FontSize").ok().and_then(|o| o.as_float().ok())
+            });
+
+        fonts.insert(
+            resource_name,
+            FontInfo {
+                name: base_font_name,
+                size: descriptor_size,
+            },
+        );
+    }
+
+    (fonts, warnings)
 }
 
 /// Extract raw text segments from a page's content stream.
@@ -167,5 +248,107 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    // ── resolve_fonts_for_page tests ──
+
+    /// Helper to load a fixture PDF for font resolution tests.
+    fn load_fixture(name: &str) -> lopdf::Document {
+        let path = fixture_path(name);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("fixture {} must exist at {:?}: {}", name, path, e));
+        let (doc, _) = load_pdf(&bytes);
+        doc.expect("fixture should be a valid PDF")
+    }
+
+    #[test]
+    fn resolve_fonts_for_page_simple_returns_font_entries() {
+        let doc = load_fixture("simple.pdf");
+        let (fonts, warnings) = resolve_fonts_for_page(&doc, 1);
+        // simple.pdf uses Helvetica — there should be at least one font
+        assert!(
+            !fonts.is_empty(),
+            "simple.pdf page 1 should have font entries"
+        );
+        // Check that at least one font has "Helvetica" in its name
+        let has_helvetica = fonts.values().any(|f| f.name.contains("Helvetica"));
+        assert!(
+            has_helvetica,
+            "simple.pdf should have a Helvetica font, got: {:?}",
+            fonts
+        );
+        // No warnings expected for a well-formed page
+        let malformed_warnings: Vec<_> = warnings
+            .iter()
+            .filter(|w| matches!(w, Warning::MissingFontMetrics { .. }))
+            .collect();
+        assert!(
+            malformed_warnings.is_empty(),
+            "well-formed page should not produce MissingFontMetrics warnings"
+        );
+    }
+
+    #[test]
+    fn resolve_fonts_for_page_bold_italic_returns_bold_and_italic_fonts() {
+        let doc = load_fixture("bold-italic.pdf");
+        let (fonts, _) = resolve_fonts_for_page(&doc, 1);
+        assert!(
+            !fonts.is_empty(),
+            "bold-italic.pdf page 1 should have font entries"
+        );
+        // Should have a Bold font and an Oblique/Italic font
+        let names: Vec<&str> = fonts.values().map(|f| f.name.as_str()).collect();
+        let has_bold = names.iter().any(|n| n.to_lowercase().contains("bold"));
+        let has_italic = names
+            .iter()
+            .any(|n| n.to_lowercase().contains("oblique") || n.to_lowercase().contains("italic"));
+        assert!(
+            has_bold,
+            "bold-italic.pdf should have a Bold font, got: {:?}",
+            names
+        );
+        assert!(
+            has_italic,
+            "bold-italic.pdf should have an Oblique/Italic font, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn resolve_fonts_for_page_strips_subset_prefix() {
+        // Subset prefixes are 6 uppercase letters followed by +
+        // Our fixtures may or may not have them, but if they do, names should be stripped.
+        let doc = load_fixture("simple.pdf");
+        let (fonts, _) = resolve_fonts_for_page(&doc, 1);
+        for fi in fonts.values() {
+            // No font name should start with a 6-uppercase-letter prefix
+            assert!(
+                !has_subset_prefix(&fi.name),
+                "font name should have subset prefix stripped: {}",
+                fi.name
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_fonts_for_page_preserves_resource_names_as_keys() {
+        let doc = load_fixture("simple.pdf");
+        let (fonts, _) = resolve_fonts_for_page(&doc, 1);
+        // Keys should be font resource names like b"F1", b"Helv", etc.
+        for key in fonts.keys() {
+            assert!(
+                !key.is_empty(),
+                "font resource name key should not be empty"
+            );
+        }
+    }
+
+    /// Check if a font name has a subset prefix (6 uppercase ASCII letters + '+')
+    fn has_subset_prefix(name: &str) -> bool {
+        if name.len() < 7 {
+            return false;
+        }
+        let prefix = &name[..7];
+        prefix.ends_with('+') && prefix[..6].chars().all(|c| c.is_ascii_uppercase())
     }
 }
