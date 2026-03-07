@@ -64,4 +64,13 @@ mod tests {
         assert_eq!(result.document.nodes.len(), 1);
         assert_eq!(result.warnings.len(), 1);
     }
+
+    #[test]
+    fn raw_text_variant_round_trips() {
+        let node = Node::RawText("unclassified".to_string());
+        match node {
+            Node::RawText(s) => assert_eq!(s, "unclassified"),
+            _ => panic!("expected raw text"),
+        }
+    }
 }
