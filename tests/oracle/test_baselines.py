@@ -7,6 +7,7 @@ def test_baseline_files_exist_and_have_pages():
         "simple.oracle.json",
         "multi-heading.oracle.json",
         "bold-italic.oracle.json",
+        "multi-page.oracle.json",
     ]
     for name in fixtures:
         path = Path("tests/fixtures") / name

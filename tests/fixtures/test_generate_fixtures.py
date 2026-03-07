@@ -8,5 +8,6 @@ def test_expected_fixture_files_exist():
         "multi-heading.pdf",
         "bold-italic.pdf",
         "corrupted.pdf",
+        "multi-page.pdf",
     }
     assert expected.issubset({p.name for p in base.glob("*.pdf")})

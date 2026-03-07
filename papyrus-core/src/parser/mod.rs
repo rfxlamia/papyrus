@@ -359,16 +359,106 @@ fn extract_string_bytes(obj: &lopdf::Object) -> Option<Vec<u8>> {
 ///
 /// Never panics. Returns empty results with warnings on failure.
 pub fn parse_pdf(bytes: &[u8]) -> (Vec<RawTextSegment>, DocumentMetadata, Vec<Warning>) {
-    let _ = bytes;
-    (
-        Vec::new(),
-        DocumentMetadata {
-            title: None,
-            author: None,
-            page_count: 0,
-        },
-        Vec::new(),
-    )
+    let mut all_segments = Vec::new();
+    let mut all_warnings = Vec::new();
+
+    // Step 1: Load PDF
+    let (doc_opt, load_warnings) = load_pdf(bytes);
+    all_warnings.extend(load_warnings);
+
+    let doc = match doc_opt {
+        Some(d) => d,
+        None => {
+            return (
+                all_segments,
+                DocumentMetadata {
+                    title: None,
+                    author: None,
+                    page_count: 0,
+                },
+                all_warnings,
+            );
+        }
+    };
+
+    // Step 2: Extract metadata
+    let pages = doc.get_pages();
+    let page_count = pages.len();
+
+    // Try to extract title and author from the document info dictionary
+    let (title, author) = extract_doc_info(&doc);
+
+    let metadata = DocumentMetadata {
+        title,
+        author,
+        page_count,
+    };
+
+    // Step 3: Per-page extraction — iterate in page order (1-based)
+    let mut page_numbers: Vec<u32> = pages.keys().copied().collect();
+    page_numbers.sort();
+
+    for &page_num in &page_numbers {
+        let page_number = page_num as usize;
+
+        // Resolve fonts for this page
+        let (fonts, font_warnings) = resolve_fonts_for_page(&doc, page_number);
+        all_warnings.extend(font_warnings);
+
+        // Extract text segments for this page
+        let (segments, extract_warnings) =
+            extract_text_segments_for_page(&doc, page_number, &fonts);
+        all_warnings.extend(extract_warnings);
+
+        all_segments.extend(segments);
+    }
+
+    (all_segments, metadata, all_warnings)
+}
+
+/// Extract title and author from PDF info dictionary.
+fn extract_doc_info(doc: &lopdf::Document) -> (Option<String>, Option<String>) {
+    // Try the trailer's /Info reference
+    let info_dict = doc
+        .trailer
+        .get(b"Info")
+        .ok()
+        .and_then(|obj| match obj {
+            lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
+            _ => Some(obj),
+        })
+        .and_then(|obj| obj.as_dict().ok());
+
+    let info = match info_dict {
+        Some(d) => d,
+        None => return (None, None),
+    };
+
+    let title = info.get(b"Title").ok().and_then(|obj| match obj {
+        lopdf::Object::String(bytes, _) => {
+            let s = decode_pdf_string(bytes);
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    });
+
+    let author = info.get(b"Author").ok().and_then(|obj| match obj {
+        lopdf::Object::String(bytes, _) => {
+            let s = decode_pdf_string(bytes);
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    });
+
+    (title, author)
 }
 
 #[cfg(test)]
@@ -611,6 +701,139 @@ mod tests {
                 "Chapter 1 should come before Body text. in operator order"
             );
         }
+    }
+
+    // ── parse_pdf tests ──
+
+    #[test]
+    fn parse_pdf_simple_returns_metadata_and_segments() {
+        let path = fixture_path("simple.pdf");
+        let bytes = std::fs::read(&path).unwrap();
+        let (segments, metadata, warnings) = parse_pdf(&bytes);
+
+        // Metadata
+        assert_eq!(metadata.page_count, 1, "simple.pdf has 1 page");
+
+        // Segments should not be empty
+        assert!(!segments.is_empty(), "should produce segments");
+
+        // All segments should be page 1 (1-based)
+        for seg in &segments {
+            assert_eq!(seg.page_number, 1, "all segments should be page 1");
+        }
+
+        // Combined text should contain oracle-expected content
+        let combined: String = segments.iter().map(|s| s.text.as_str()).collect();
+        assert!(combined.contains("Chapter 1"), "should contain 'Chapter 1'");
+        assert!(
+            combined.contains("Body text."),
+            "should contain 'Body text.'"
+        );
+
+        // No critical warnings for valid PDF
+        for w in &warnings {
+            if let Warning::UnreadableTextStream { .. } = w {
+                panic!("valid PDF should not produce UnreadableTextStream");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_pdf_failed_load_returns_empty_with_warning() {
+        let (segments, metadata, warnings) = parse_pdf(b"not a pdf");
+        assert!(
+            segments.is_empty(),
+            "failed load should produce no segments"
+        );
+        assert_eq!(
+            metadata.page_count, 0,
+            "failed load should have page_count=0"
+        );
+        assert!(metadata.title.is_none(), "failed load should have no title");
+        assert!(
+            metadata.author.is_none(),
+            "failed load should have no author"
+        );
+        assert!(!warnings.is_empty(), "failed load should produce warnings");
+        match &warnings[0] {
+            Warning::MalformedPdfObject { detail } => {
+                assert!(!detail.is_empty());
+            }
+            other => panic!("expected MalformedPdfObject, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pdf_empty_bytes_returns_empty_with_warning() {
+        let (segments, metadata, warnings) = parse_pdf(b"");
+        assert!(segments.is_empty());
+        assert_eq!(metadata.page_count, 0);
+        assert!(!warnings.is_empty());
+        match &warnings[0] {
+            Warning::MalformedPdfObject { .. } => {}
+            other => panic!("expected MalformedPdfObject, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pdf_corrupted_fixture_returns_empty_with_warning() {
+        let path = fixture_path("corrupted.pdf");
+        let bytes = std::fs::read(&path).unwrap();
+        let (segments, metadata, warnings) = parse_pdf(&bytes);
+        assert!(
+            segments.is_empty(),
+            "corrupted PDF should produce no segments"
+        );
+        assert_eq!(metadata.page_count, 0);
+        assert!(!warnings.is_empty());
+        match &warnings[0] {
+            Warning::MalformedPdfObject { detail } => {
+                assert!(!detail.is_empty());
+            }
+            other => panic!("expected MalformedPdfObject, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pdf_multi_page_has_1_based_page_numbers() {
+        let path = fixture_path("multi-page.pdf");
+        let bytes = std::fs::read(&path).unwrap();
+        let (segments, metadata, _) = parse_pdf(&bytes);
+
+        assert!(
+            metadata.page_count >= 2,
+            "multi-page.pdf should have 2+ pages"
+        );
+
+        // Check that segments reference pages starting from 1, not 0
+        let min_page = segments.iter().map(|s| s.page_number).min().unwrap_or(0);
+        assert_eq!(min_page, 1, "minimum page number should be 1 (1-based)");
+
+        // Check that segments span multiple pages
+        let max_page = segments.iter().map(|s| s.page_number).max().unwrap_or(0);
+        assert!(
+            max_page >= 2,
+            "multi-page.pdf should have segments from page 2+, got max={}",
+            max_page
+        );
+    }
+
+    #[test]
+    fn parse_pdf_aggregates_warnings_in_stable_order() {
+        // Calling parse_pdf twice on the same input should produce identical warnings
+        let path = fixture_path("simple.pdf");
+        let bytes = std::fs::read(&path).unwrap();
+        let (_, _, warnings1) = parse_pdf(&bytes);
+        let (_, _, warnings2) = parse_pdf(&bytes);
+        assert_eq!(
+            warnings1.len(),
+            warnings2.len(),
+            "warnings should be deterministic"
+        );
+        assert_eq!(
+            warnings1, warnings2,
+            "warnings should be stable across runs"
+        );
     }
 
     // ── decode_pdf_string tests ──
