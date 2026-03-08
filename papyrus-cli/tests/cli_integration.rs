@@ -15,11 +15,8 @@ fn fixture_path(name: &str) -> PathBuf {
 
 #[test]
 fn invalid_arguments_exit_with_code_2() {
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .arg("convert")
-        .assert()
-        .code(2);
+    let mut cmd = Command::cargo_bin("papyrus").unwrap();
+    cmd.arg("convert").assert().code(2);
 }
 
 #[test]
@@ -27,9 +24,8 @@ fn single_file_to_output_file() {
     let tmp = tempdir().unwrap();
     let out = tmp.path().join("out.md");
 
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", fixture_path("simple.pdf").to_str().unwrap(), "-o", out.to_str().unwrap()])
+    let mut cmd = Command::cargo_bin("papyrus").unwrap();
+    cmd.args(["convert", fixture_path("simple.pdf").to_str().unwrap(), "-o", out.to_str().unwrap()])
         .assert()
         .success();
 
@@ -39,9 +35,8 @@ fn single_file_to_output_file() {
 
 #[test]
 fn stdout_mode_without_output_flag() {
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", fixture_path("simple.pdf").to_str().unwrap()])
+    let mut cmd = Command::cargo_bin("papyrus").unwrap();
+    cmd.args(["convert", fixture_path("simple.pdf").to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("Chapter 1"));
@@ -55,9 +50,8 @@ fn batch_mode_writes_multiple_files() {
     fs::copy(fixture_path("simple.pdf"), input.path().join("simple.pdf")).unwrap();
     fs::copy(fixture_path("multi-page.pdf"), input.path().join("multi-page.pdf")).unwrap();
 
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", input.path().to_str().unwrap(), "-o", output.path().to_str().unwrap()])
+    let mut cmd = Command::cargo_bin("papyrus").unwrap();
+    cmd.args(["convert", input.path().to_str().unwrap(), "-o", output.path().to_str().unwrap()])
         .assert()
         .success();
 
@@ -67,9 +61,8 @@ fn batch_mode_writes_multiple_files() {
 
 #[test]
 fn invalid_input_returns_exit_code_1() {
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", "tests/fixtures/does-not-exist.pdf"])
+    let mut cmd = Command::cargo_bin("papyrus").unwrap();
+    cmd.args(["convert", "tests/fixtures/does-not-exist.pdf"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error:"));
@@ -77,8 +70,8 @@ fn invalid_input_returns_exit_code_1() {
 
 #[test]
 fn custom_flags_change_output() {
-    let default = Command::cargo_bin("papyrus")
-        .unwrap()
+    let mut cmd1 = Command::cargo_bin("papyrus").unwrap();
+    let default = cmd1
         .args(["convert", fixture_path("bold-italic.pdf").to_str().unwrap()])
         .assert()
         .success()
@@ -86,8 +79,8 @@ fn custom_flags_change_output() {
         .stdout
         .clone();
 
-    let no_bold = Command::cargo_bin("papyrus")
-        .unwrap()
+    let mut cmd2 = Command::cargo_bin("papyrus").unwrap();
+    let no_bold = cmd2
         .args(["convert", fixture_path("bold-italic.pdf").to_str().unwrap(), "--no-bold", "--heading-ratio", "2.0"])
         .assert()
         .success()
@@ -101,9 +94,8 @@ fn custom_flags_change_output() {
 #[test]
 fn pipe_mode_reads_stdin_and_writes_stdout() {
     let bytes = fs::read(fixture_path("simple.pdf")).unwrap();
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", "-"])
+    let mut cmd = Command::cargo_bin("papyrus").unwrap();
+    cmd.args(["convert", "-"])
         .write_stdin(bytes)
         .assert()
         .success()
@@ -112,16 +104,14 @@ fn pipe_mode_reads_stdin_and_writes_stdout() {
 
 #[test]
 fn warning_output_visible_and_quiet_suppresses() {
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", fixture_path("corrupted.pdf").to_str().unwrap()])
+    let mut cmd1 = Command::cargo_bin("papyrus").unwrap();
+    cmd1.args(["convert", fixture_path("corrupted.pdf").to_str().unwrap()])
         .assert()
         .success()
         .stderr(predicate::str::contains("Warning:"));
 
-    Command::cargo_bin("papyrus")
-        .unwrap()
-        .args(["convert", fixture_path("corrupted.pdf").to_str().unwrap(), "--quiet"])
+    let mut cmd2 = Command::cargo_bin("papyrus").unwrap();
+    cmd2.args(["convert", fixture_path("corrupted.pdf").to_str().unwrap(), "--quiet"])
         .assert()
         .success()
         .stderr(predicate::str::contains("Warning:").not());

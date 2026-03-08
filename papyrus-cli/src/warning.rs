@@ -1,6 +1,13 @@
 use owo_colors::OwoColorize;
 use papyrus_core::ast::Warning;
 
+/// Formats a single warning with colored output.
+///
+/// # Arguments
+/// * `warning` - The warning to format
+///
+/// # Returns
+/// Formatted string with ANSI color codes (yellow "Warning:", cyan page numbers).
 pub fn format_warning(warning: &Warning) -> String {
     let prefix = "Warning:".yellow().to_string();
     match warning {
@@ -19,6 +26,14 @@ pub fn format_warning(warning: &Warning) -> String {
     }
 }
 
+/// Renders a list of warnings as formatted strings.
+///
+/// # Arguments
+/// * `warnings` - Slice of warnings to render
+/// * `quiet` - If true, suppresses all output and returns empty vector
+///
+/// # Returns
+/// Vector of formatted warning strings, or empty vector if quiet mode is enabled.
 pub fn render_warning_lines(warnings: &[Warning], quiet: bool) -> Vec<String> {
     if quiet {
         return vec![];

@@ -49,12 +49,25 @@ pub enum InputKind {
     Directory(PathBuf),
 }
 
-pub fn classify_input(input: &Path, _stdin_is_terminal: bool) -> io::Result<InputKind> {
+/// Classifies the input path as pipe mode (stdin), file, or directory.
+///
+/// # Arguments
+/// * `input` - Path to classify. Use "-" for stdin/pipe mode.
+///
+/// # Returns
+/// * `InputKind::Pipe` if input is "-"
+/// * `InputKind::File` if input is a file
+/// * `InputKind::Directory` if input is a directory
+///
+/// # Errors
+/// Returns `io::Error` if the path cannot be accessed or metadata cannot be read.
+pub fn classify_input(input: &Path) -> io::Result<InputKind> {
+    // Note: Simplified from original plan which required non-TTY stdin to force pipe mode.
+    // Current implementation only uses explicit "-" for pipe mode, which is more intuitive
+    // and aligns with standard Unix CLI conventions (explicit stdin marker).
     if input == Path::new("-") {
         return Ok(InputKind::Pipe);
     }
-    // If stdin is not a terminal and input is not explicitly "-", still treat as file/dir
-    // Only force pipe mode for explicit "-" argument
     let meta = std::fs::metadata(input)?;
     if meta.is_dir() {
         Ok(InputKind::Directory(input.to_path_buf()))
@@ -71,7 +84,8 @@ fn build_engine(cfg: ConvertConfig) -> Papyrus {
         .build()
 }
 
-pub fn workspace_fixture(name: &str) -> PathBuf {
+#[cfg(test)]
+pub(crate) fn workspace_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -80,6 +94,18 @@ pub fn workspace_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Converts a single PDF file to Markdown.
+///
+/// # Arguments
+/// * `input` - Path to the input PDF file
+/// * `output` - Optional path to write the output. If `None`, output is not written to disk.
+/// * `cfg` - Conversion configuration (heading ratio, style detection, quiet mode)
+///
+/// # Returns
+/// `ConversionSummary` containing success status and any warnings encountered.
+///
+/// # Errors
+/// Returns `io::Error` if the file cannot be read or written.
 pub fn convert_file(
     input: &Path,
     output: Option<&Path>,
@@ -99,6 +125,16 @@ pub fn convert_file(
     })
 }
 
+/// Discovers all PDF files in a directory (non-recursive).
+///
+/// # Arguments
+/// * `input_dir` - Directory to search for PDF files
+///
+/// # Returns
+/// Sorted vector of paths to PDF files (case-insensitive .pdf or .PDF extension).
+///
+/// # Errors
+/// Returns `io::Error` if the directory cannot be read.
 pub fn discover_pdf_files(input_dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = vec![];
     for entry in std::fs::read_dir(input_dir)? {
@@ -116,6 +152,18 @@ pub fn discover_pdf_files(input_dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Maps an input PDF file path to its corresponding output Markdown path.
+///
+/// # Arguments
+/// * `input_root` - Root directory of the input file
+/// * `input_file` - Path to the input PDF file
+/// * `output` - Optional output directory. If `None`, uses `input_root`.
+///
+/// # Returns
+/// Path with the same stem as the input file but with `.md` extension.
+///
+/// # Errors
+/// Returns `io::Error` if the file stem cannot be determined.
 pub fn target_path(input_root: &Path, input_file: &Path, output: Option<&Path>) -> io::Result<PathBuf> {
     let stem = input_file
         .file_stem()
@@ -129,6 +177,19 @@ pub fn target_path(input_root: &Path, input_file: &Path, output: Option<&Path>) 
     Ok(target)
 }
 
+/// Converts all PDF files in a directory to Markdown with progress indication.
+///
+/// # Arguments
+/// * `input_dir` - Directory containing PDF files to convert
+/// * `output_dir` - Optional output directory. If `None`, writes to `input_dir`.
+/// * `cfg` - Conversion configuration
+///
+/// # Returns
+/// `BatchSummary` with counts of converted/failed files and collected warnings.
+/// Exit code is 0 if at least one file converted successfully, 1 if all failed.
+///
+/// # Errors
+/// Returns `io::Error` if directories cannot be accessed or created.
 pub fn convert_directory(
     input_dir: &Path,
     output_dir: Option<&Path>,
@@ -142,7 +203,7 @@ pub fn convert_directory(
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template("[{pos}/{len}] Converting {msg}...")
-            .unwrap()
+            .expect("valid progress bar template")
     );
 
     let mut summary = BatchSummary::default();
@@ -167,6 +228,18 @@ pub fn convert_directory(
     Ok(summary)
 }
 
+/// Converts PDF from a reader (stdin) to Markdown written to a writer (stdout).
+///
+/// # Arguments
+/// * `reader` - Input stream containing PDF bytes
+/// * `writer` - Output stream for Markdown text
+/// * `cfg` - Conversion configuration
+///
+/// # Returns
+/// `ConversionSummary` containing success status and warnings.
+///
+/// # Errors
+/// Returns `io::Error` if reading or writing fails.
 pub fn convert_pipe<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -192,16 +265,16 @@ mod tests {
 
     #[test]
     fn dash_input_is_pipe_mode() {
-        let mode = classify_input(Path::new("-"), true).unwrap();
+        let mode = classify_input(Path::new("-")).unwrap();
         assert!(matches!(mode, InputKind::Pipe));
     }
 
     #[test]
-    fn file_path_is_file_mode_regardless_of_tty() {
+    fn file_path_is_file_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let test_file = tmp.path().join("test.pdf");
         std::fs::write(&test_file, b"%PDF").unwrap();
-        let mode = classify_input(&test_file, false).unwrap();
+        let mode = classify_input(&test_file).unwrap();
         assert!(matches!(mode, InputKind::File(_)));
     }
 
