@@ -2,13 +2,19 @@
 name = "papyrus-cli"
 version = "0.1.0"
 edition = "2021"
+authors = ["rfxlamia"]
+description = "Command-line tool for PDF-to-Markdown conversion with smart heading detection, bold/italic extraction, and CommonMark output. Pure Rust, pipe-friendly."
+repository = "https://github.com/rfxlamia/papyrus"
+license = "MIT OR Apache-2.0"
+keywords = ["pdf", "markdown", "cli", "convert", "extract"]
+categories = ["command-line-utilities", "text-processing"]
 
 [[bin]]
 name = "papyrus"
 path = "src/main.rs"
 
 [dependencies]
-papyrus-core = { path = "../papyrus-core" }
+papyrus-core = "0.1.0"
 clap = { version = "4.5", features = ["derive"] }
 indicatif = "0.17"
 owo-colors = "4.1"
