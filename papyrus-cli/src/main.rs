@@ -1,17 +1,8 @@
-pub fn stub_message() -> &'static str {
-    "papyrus-cli: not yet implemented"
-}
+use clap::Parser;
+use papyrus_cli::cli::Cli;
+use papyrus_cli::run::run_cli;
 
 fn main() {
-    println!("{}", stub_message());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::stub_message;
-
-    #[test]
-    fn stub_message_is_stable() {
-        assert_eq!(stub_message(), "papyrus-cli: not yet implemented");
-    }
+    let cli = Cli::parse();
+    std::process::exit(run_cli(cli));
 }
