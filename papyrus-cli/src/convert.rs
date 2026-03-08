@@ -1,6 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use papyrus_core::Papyrus;
+use indicatif::{ProgressBar, ProgressStyle};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ConvertConfig {
@@ -25,6 +26,19 @@ impl ConvertConfig {
 pub struct ConversionSummary {
     pub succeeded: bool,
     pub warnings: Vec<papyrus_core::ast::Warning>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct BatchSummary {
+    pub converted: usize,
+    pub failed: usize,
+    pub warnings: Vec<(PathBuf, papyrus_core::ast::Warning)>,
+}
+
+impl BatchSummary {
+    pub fn exit_code(&self) -> i32 {
+        if self.converted > 0 { 0 } else { 1 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +126,44 @@ pub fn target_path(input_root: &Path, input_file: &Path, output: Option<&Path>) 
     Ok(target)
 }
 
+pub fn convert_directory(
+    input_dir: &Path,
+    output_dir: Option<&Path>,
+    cfg: ConvertConfig,
+) -> io::Result<BatchSummary> {
+    let files = discover_pdf_files(input_dir)?;
+    if let Some(dir) = output_dir {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let pb = ProgressBar::new(files.len() as u64);
+    pb.set_style(
+        ProgressStyle::with_template("[{pos}/{len}] Converting {msg}...")
+            .unwrap()
+    );
+
+    let mut summary = BatchSummary::default();
+    for file in files {
+        let name = file.file_name().unwrap().to_string_lossy().to_string();
+        pb.set_message(name);
+        let target = target_path(input_dir, &file, output_dir)?;
+        match convert_file(&file, Some(&target), cfg) {
+            Ok(result) => {
+                summary.converted += 1;
+                for warning in result.warnings {
+                    summary.warnings.push((file.clone(), warning));
+                }
+            }
+            Err(_) => {
+                summary.failed += 1;
+            }
+        }
+        pb.inc(1);
+    }
+    pb.finish_and_clear();
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify_input, ConvertConfig, InputKind};
@@ -191,5 +243,44 @@ mod tests {
 
         let target = target_path(input_root, input_file, Some(output_root)).unwrap();
         assert_eq!(target, PathBuf::from("/tmp/out/report.md"));
+    }
+
+    #[test]
+    fn convert_directory_returns_success_when_at_least_one_file_converts() {
+        use super::{convert_directory, workspace_fixture};
+        let input = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+
+        std::fs::copy(workspace_fixture("simple.pdf"), input.path().join("simple.pdf")).unwrap();
+        std::fs::write(input.path().join("bad.pdf"), b"not a real pdf").unwrap();
+
+        let summary = convert_directory(
+            input.path(),
+            Some(output.path()),
+            ConvertConfig::from_flags(1.2, false, false, false),
+        )
+        .unwrap();
+
+        assert!(summary.converted >= 1);
+        assert!(summary.failed <= 1);
+        assert_eq!(summary.exit_code(), 0);
+    }
+
+    #[test]
+    fn convert_directory_returns_failure_when_all_files_fail() {
+        use super::convert_directory;
+        let input = tempfile::tempdir().unwrap();
+        // Create a directory instead of a file to cause read failure
+        std::fs::create_dir(input.path().join("bad.pdf")).unwrap();
+
+        let summary = convert_directory(
+            input.path(),
+            None,
+            ConvertConfig::from_flags(1.2, false, false, false),
+        )
+        .unwrap();
+
+        assert_eq!(summary.converted, 0);
+        assert_eq!(summary.exit_code(), 1);
     }
 }
