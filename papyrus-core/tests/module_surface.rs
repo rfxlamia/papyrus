@@ -1,5 +1,5 @@
 use papyrus_core::detector::{ClassifiedSegment, DetectorConfig, SegmentClass};
-use papyrus_core::{parser, renderer};
+use papyrus_core::{convert, parser, renderer, Papyrus};
 
 #[test]
 fn module_surfaces_are_linked() {
@@ -103,4 +103,20 @@ fn parser_font_info_exposes_descriptor_metrics() {
 
     assert_eq!(font.font_weight, Some(700.0));
     assert_eq!(font.italic_angle, Some(-12.0));
+}
+
+#[test]
+fn public_api_builder_and_convert_are_wired() {
+    let engine = Papyrus::builder()
+        .heading_size_ratio(1.5)
+        .detect_bold(false)
+        .detect_italic(false)
+        .build();
+
+    let result = engine.extract(b"this is not a pdf");
+    assert_eq!(result.document.metadata.page_count, 0);
+    assert!(!result.warnings.is_empty());
+
+    let default_result = convert(b"this is not a pdf");
+    assert!(!default_result.warnings.is_empty());
 }
