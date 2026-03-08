@@ -49,10 +49,12 @@ pub enum InputKind {
     Directory(PathBuf),
 }
 
-pub fn classify_input(input: &Path, stdin_is_terminal: bool) -> io::Result<InputKind> {
-    if input == Path::new("-") || !stdin_is_terminal {
+pub fn classify_input(input: &Path, _stdin_is_terminal: bool) -> io::Result<InputKind> {
+    if input == Path::new("-") {
         return Ok(InputKind::Pipe);
     }
+    // If stdin is not a terminal and input is not explicitly "-", still treat as file/dir
+    // Only force pipe mode for explicit "-" argument
     let meta = std::fs::metadata(input)?;
     if meta.is_dir() {
         Ok(InputKind::Directory(input.to_path_buf()))
@@ -195,9 +197,12 @@ mod tests {
     }
 
     #[test]
-    fn non_tty_stdin_forces_pipe_mode() {
-        let mode = classify_input(Path::new("tests/fixtures/simple.pdf"), false).unwrap();
-        assert!(matches!(mode, InputKind::Pipe));
+    fn file_path_is_file_mode_regardless_of_tty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let test_file = tmp.path().join("test.pdf");
+        std::fs::write(&test_file, b"%PDF").unwrap();
+        let mode = classify_input(&test_file, false).unwrap();
+        assert!(matches!(mode, InputKind::File(_)));
     }
 
     #[test]

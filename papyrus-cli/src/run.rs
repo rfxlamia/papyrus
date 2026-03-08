@@ -38,13 +38,21 @@ pub fn run_cli(cli: Cli) -> i32 {
                 Ok(InputKind::File(path)) => {
                     // When no output file specified, write to stdout
                     if output.is_none() {
-                        let mut stdout = io::stdout().lock();
-                        match convert_pipe(&mut std::fs::File::open(&path).unwrap(), &mut stdout, cfg) {
-                            Ok(summary) => {
-                                for line in render_warning_lines(&summary.warnings, cfg.quiet) {
-                                    eprintln!("{line}");
+                        match std::fs::File::open(&path) {
+                            Ok(mut file) => {
+                                let mut stdout = io::stdout().lock();
+                                match convert_pipe(&mut file, &mut stdout, cfg) {
+                                    Ok(summary) => {
+                                        for line in render_warning_lines(&summary.warnings, cfg.quiet) {
+                                            eprintln!("{line}");
+                                        }
+                                        0
+                                    }
+                                    Err(err) => {
+                                        let _ = writeln!(io::stderr(), "error: {err}");
+                                        fatal_io_exit_code()
+                                    }
                                 }
-                                0
                             }
                             Err(err) => {
                                 let _ = writeln!(io::stderr(), "error: {err}");
