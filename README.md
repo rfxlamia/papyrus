@@ -5,6 +5,7 @@
 [![Crates.io](https://img.shields.io/crates/v/papyrus-cli)](https://crates.io/crates/papyrus-cli)
 [![Crates.io (core)](https://img.shields.io/crates/v/papyrus-core?label=core)](https://crates.io/crates/papyrus-core)
 [![docs.rs](https://docs.rs/papyrus-core/badge.svg)](https://docs.rs/papyrus-core)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/rfxlamia?color=brightgreen)](https://github.com/sponsors/rfxlamia)
 
 Papyrus extracts text from PDFs and converts it to clean, structured Markdown. It detects headings, bold, and italic formatting—producing CommonMark output that works with LLMs, knowledge bases, and Markdown-based tools.
 
@@ -133,3 +134,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, architecture ove
 ## License
 
 MIT OR Apache-2.0 — See [LICENSE-MIT](./LICENSE-MIT) or [LICENSE-APACHE](./LICENSE-APACHE) for details.
+
+## Support
+
+If you find Papyrus useful, consider [sponsoring the project](https://github.com/sponsors/rfxlamia) ❤️
