@@ -1,5 +1,21 @@
+use papyrus_core::ast::{ConversionResult, Document, DocumentMetadata, Node, Span};
 use papyrus_core::detector::{ClassifiedSegment, DetectorConfig, SegmentClass};
 use papyrus_core::{convert, parser, renderer, Papyrus};
+
+#[test]
+fn renderer_surface_exposes_document_entrypoint() {
+    let doc = Document {
+        metadata: DocumentMetadata {
+            title: None,
+            author: None,
+            page_count: 0,
+        },
+        nodes: vec![],
+    };
+
+    let markdown = renderer::render_document(&doc);
+    assert!(markdown.is_empty());
+}
 
 #[test]
 fn module_surfaces_are_linked() {
@@ -11,8 +27,16 @@ fn module_surfaces_are_linked() {
     assert!(metadata.title.is_none());
     assert!(metadata.author.is_none());
 
-    // renderer stub still works with its current signature
-    let markdown = renderer::render_markdown(&[]);
+    // renderer::render_document is covered by renderer_surface_exposes_document_entrypoint;
+    // confirm it compiles and links correctly here too.
+    let markdown = renderer::render_document(&Document {
+        metadata: DocumentMetadata {
+            title: None,
+            author: None,
+            page_count: 0,
+        },
+        nodes: vec![],
+    });
     assert!(markdown.is_empty());
 
     // Incomplete PDF header may produce MalformedPdfObject warnings once
@@ -103,6 +127,34 @@ fn parser_font_info_exposes_descriptor_metrics() {
 
     assert_eq!(font.font_weight, Some(700.0));
     assert_eq!(font.italic_angle, Some(-12.0));
+}
+
+#[test]
+fn markdown_api_methods_delegate_to_renderer_output() {
+    let document = Document {
+        metadata: DocumentMetadata {
+            title: None,
+            author: None,
+            page_count: 1,
+        },
+        nodes: vec![Node::Paragraph {
+            spans: vec![Span {
+                text: "phase4".to_string(),
+                bold: false,
+                italic: false,
+                font_size: 12.0,
+                font_name: None,
+            }],
+        }],
+    };
+
+    let result = ConversionResult {
+        document: document.clone(),
+        warnings: vec![],
+    };
+
+    assert_eq!(document.to_markdown(), "phase4\n");
+    assert_eq!(result.to_markdown(), "phase4\n");
 }
 
 #[test]
