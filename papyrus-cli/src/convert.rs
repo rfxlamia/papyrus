@@ -82,6 +82,36 @@ pub fn convert_file(
     })
 }
 
+pub fn discover_pdf_files(input_dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = vec![];
+    for entry in std::fs::read_dir(input_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if ext.eq_ignore_ascii_case("pdf") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+pub fn target_path(input_root: &Path, input_file: &Path, output: Option<&Path>) -> io::Result<PathBuf> {
+    let stem = input_file
+        .file_stem()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing file stem"))?;
+
+    let mut target = match output {
+        Some(output_root) => output_root.join(stem),
+        None => input_root.join(stem),
+    };
+    target.set_extension("md");
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify_input, ConvertConfig, InputKind};
@@ -133,5 +163,33 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn discover_pdf_files_is_non_recursive_and_sorted() {
+        use super::discover_pdf_files;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.pdf"), b"%PDF-1.7").unwrap();
+        std::fs::write(tmp.path().join("b.PDF"), b"%PDF-1.7").unwrap();
+        std::fs::write(tmp.path().join("notes.txt"), b"nope").unwrap();
+        std::fs::create_dir(tmp.path().join("nested")).unwrap();
+        std::fs::write(tmp.path().join("nested").join("c.pdf"), b"%PDF-1.7").unwrap();
+
+        let files = discover_pdf_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files[0].ends_with("a.pdf"));
+        assert!(files[1].ends_with("b.PDF"));
+    }
+
+    #[test]
+    fn target_path_maps_to_output_dir_with_md_extension() {
+        use super::target_path;
+        use std::path::PathBuf;
+        let input_root = Path::new("/tmp/in");
+        let input_file = Path::new("/tmp/in/report.pdf");
+        let output_root = Path::new("/tmp/out");
+
+        let target = target_path(input_root, input_file, Some(output_root)).unwrap();
+        assert_eq!(target, PathBuf::from("/tmp/out/report.md"));
     }
 }
