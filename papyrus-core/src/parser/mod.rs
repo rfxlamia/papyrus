@@ -370,13 +370,35 @@ pub fn extract_text_segments_for_page(
             }
             "TJ" => {
                 // Show array of strings/numbers: operand is [Array]
+                // In PDF, TJ arrays contain strings (text) and numbers (positioning adjustments).
+                // Large negative numbers typically represent word spacing.
                 if let Some(lopdf::Object::Array(arr)) = op.operands.first() {
                     let mut combined = String::new();
+                    let mut prev_was_string = false;
+                    let mut needs_space = false;
+
                     for item in arr {
                         if let Some(bytes) = extract_string_bytes(item) {
-                            combined.push_str(&decode_pdf_string(&bytes));
+                            let text = decode_pdf_string(&bytes);
+                            // Add space if flagged by a previous large negative adjustment
+                            if needs_space
+                                && !combined.is_empty()
+                                && !combined.ends_with(char::is_whitespace)
+                                && !text.starts_with(char::is_whitespace)
+                            {
+                                combined.push(' ');
+                            }
+                            combined.push_str(&text);
+                            prev_was_string = true;
+                            needs_space = false;
+                        } else if let Some(num) = extract_number(item) {
+                            // Negative numbers move the text position backward (creating space).
+                            // A threshold of -100 is a heuristic: values more negative than this
+                            // typically represent inter-word spacing rather than kerning.
+                            if prev_was_string && num < -100.0 {
+                                needs_space = true;
+                            }
                         }
-                        // Numeric entries are kerning adjustments — skip them
                     }
                     if !combined.is_empty() {
                         let (font_res, font_sz) = get_text_state_or_default(
