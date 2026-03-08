@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
 use papyrus_core::Papyrus;
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -164,6 +165,24 @@ pub fn convert_directory(
     Ok(summary)
 }
 
+pub fn convert_pipe<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    cfg: ConvertConfig,
+) -> io::Result<ConversionSummary> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+
+    let result = build_engine(cfg).extract(&bytes);
+    writer.write_all(result.to_markdown().as_bytes())?;
+    writer.flush()?;
+
+    Ok(ConversionSummary {
+        succeeded: true,
+        warnings: result.warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify_input, ConvertConfig, InputKind};
@@ -282,5 +301,24 @@ mod tests {
 
         assert_eq!(summary.converted, 0);
         assert_eq!(summary.exit_code(), 1);
+    }
+
+    #[test]
+    fn convert_pipe_reads_stdin_and_writes_markdown_to_stdout() {
+        use super::{convert_pipe, workspace_fixture};
+        let bytes = std::fs::read(workspace_fixture("simple.pdf")).unwrap();
+        let mut stdin = std::io::Cursor::new(bytes);
+        let mut stdout = Vec::<u8>::new();
+
+        let summary = convert_pipe(
+            &mut stdin,
+            &mut stdout,
+            ConvertConfig::from_flags(1.2, false, false, false),
+        )
+        .unwrap();
+
+        let markdown = String::from_utf8(stdout).unwrap();
+        assert!(markdown.contains("Chapter 1"));
+        assert!(summary.succeeded);
     }
 }
