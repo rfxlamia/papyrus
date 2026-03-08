@@ -1,4 +1,4 @@
-use papyrus_core::ast::{Document, DocumentMetadata};
+use papyrus_core::ast::{ConversionResult, Document, DocumentMetadata, Node, Span};
 use papyrus_core::detector::{ClassifiedSegment, DetectorConfig, SegmentClass};
 use papyrus_core::{convert, parser, renderer, Papyrus};
 
@@ -127,6 +127,34 @@ fn parser_font_info_exposes_descriptor_metrics() {
 
     assert_eq!(font.font_weight, Some(700.0));
     assert_eq!(font.italic_angle, Some(-12.0));
+}
+
+#[test]
+fn markdown_api_methods_delegate_to_renderer_output() {
+    let document = Document {
+        metadata: DocumentMetadata {
+            title: None,
+            author: None,
+            page_count: 1,
+        },
+        nodes: vec![Node::Paragraph {
+            spans: vec![Span {
+                text: "phase4".to_string(),
+                bold: false,
+                italic: false,
+                font_size: 12.0,
+                font_name: None,
+            }],
+        }],
+    };
+
+    let result = ConversionResult {
+        document: document.clone(),
+        warnings: vec![],
+    };
+
+    assert_eq!(document.to_markdown(), "phase4\n");
+    assert_eq!(result.to_markdown(), "phase4\n");
 }
 
 #[test]

@@ -41,6 +41,18 @@ pub enum Warning {
     MalformedPdfObject { detail: String },
 }
 
+impl Document {
+    pub fn to_markdown(&self) -> String {
+        crate::renderer::render_document(self)
+    }
+}
+
+impl ConversionResult {
+    pub fn to_markdown(&self) -> String {
+        self.document.to_markdown()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
