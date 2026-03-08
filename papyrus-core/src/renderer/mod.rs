@@ -231,4 +231,10 @@ mod tests {
 
         assert_eq!(render_document(&doc), "");
     }
+
+    #[test]
+    fn render_span_escapes_inner_text_without_escaping_markers() {
+        let out = render_span(&span("A*B", true, false));
+        assert_eq!(out, "**A\\*B**");
+    }
 }
