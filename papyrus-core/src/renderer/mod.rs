@@ -83,8 +83,21 @@ pub(crate) fn render_node(node: &Node) -> String {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-pub fn render_document(_document: &Document) -> String {
-    String::new()
+pub fn render_document(document: &Document) -> String {
+    let body = document
+        .nodes
+        .iter()
+        .map(render_node)
+        .collect::<String>()
+        .trim_start_matches('\n')
+        .trim_end_matches('\n')
+        .to_string();
+
+    if body.is_empty() {
+        String::new()
+    } else {
+        format!("{body}\n")
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -176,5 +189,46 @@ mod tests {
     #[test]
     fn render_node_raw_text_passthrough_appends_blank_line() {
         assert_eq!(render_node(&Node::RawText("raw".to_string())), "raw\n\n");
+    }
+
+    // ── render_document ──────────────────────────────────────────────────────
+
+    #[test]
+    fn render_document_has_single_trailing_newline_for_non_empty_docs() {
+        let doc = Document {
+            metadata: crate::ast::DocumentMetadata {
+                title: None,
+                author: None,
+                page_count: 1,
+            },
+            nodes: vec![
+                Node::Heading {
+                    level: 1,
+                    spans: vec![span("Title", false, false)],
+                },
+                Node::Paragraph {
+                    spans: vec![span("Body", false, false)],
+                },
+            ],
+        };
+
+        let markdown = render_document(&doc);
+        assert_eq!(markdown, "# Title\n\nBody\n");
+        assert!(markdown.ends_with('\n'));
+        assert!(!markdown.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn render_document_empty_doc_is_empty_string() {
+        let doc = Document {
+            metadata: crate::ast::DocumentMetadata {
+                title: None,
+                author: None,
+                page_count: 0,
+            },
+            nodes: vec![],
+        };
+
+        assert_eq!(render_document(&doc), "");
     }
 }
