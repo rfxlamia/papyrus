@@ -141,6 +141,12 @@ pub enum Warning {
 - `Node::RawText` is the fallback. If the detector can't classify a text block, it still appears in output rather than being silently dropped. Aligns with the "best effort" philosophy.
 - `Warning` is an enum, not a string. Callers can pattern-match on specific warning types for programmatic handling.
 
+### Parser Conventions (Phase 2 Clarifications)
+
+- Parser-layer warning page fields are **1-based** (`page = 1` is the first page).
+- Parser load/open failures are normalized into `Warning::MalformedPdfObject` with descriptive `detail` text.
+- `RawText` fallback nodes are created by higher extraction/detection layers, not by low-level parser internals.
+
 ## 5. Public API Surface
 
 ```rust
