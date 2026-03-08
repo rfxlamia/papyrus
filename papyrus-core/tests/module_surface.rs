@@ -1,5 +1,21 @@
+use papyrus_core::ast::{Document, DocumentMetadata};
 use papyrus_core::detector::{ClassifiedSegment, DetectorConfig, SegmentClass};
 use papyrus_core::{convert, parser, renderer, Papyrus};
+
+#[test]
+fn renderer_surface_exposes_document_entrypoint() {
+    let doc = Document {
+        metadata: DocumentMetadata {
+            title: None,
+            author: None,
+            page_count: 0,
+        },
+        nodes: vec![],
+    };
+
+    let markdown = renderer::render_document(&doc);
+    assert!(markdown.is_empty());
+}
 
 #[test]
 fn module_surfaces_are_linked() {
@@ -11,8 +27,16 @@ fn module_surfaces_are_linked() {
     assert!(metadata.title.is_none());
     assert!(metadata.author.is_none());
 
-    // renderer stub still works with its current signature
-    let markdown = renderer::render_markdown(&[]);
+    // renderer now exposes render_document; verify it returns empty for empty input
+    let empty_doc = papyrus_core::ast::Document {
+        metadata: papyrus_core::ast::DocumentMetadata {
+            title: None,
+            author: None,
+            page_count: 0,
+        },
+        nodes: vec![],
+    };
+    let markdown = renderer::render_document(&empty_doc);
     assert!(markdown.is_empty());
 
     // Incomplete PDF header may produce MalformedPdfObject warnings once
