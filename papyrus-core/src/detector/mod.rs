@@ -1,12 +1,21 @@
 use std::collections::HashMap;
 
 use crate::ast::{Document, DocumentMetadata, Node, Span, Warning};
-use crate::parser::{FontInfo, RawTextSegment};
+use crate::parser::{strip_subset_prefix, FontInfo, RawTextSegment};
 
+/// Configuration for the structure-detection pass.
+///
+/// All thresholds are relative to the computed body font size.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetectorConfig {
+    /// Minimum font-size ratio over body size to classify a segment as a heading.
+    /// Defaults to `1.2`. Must be less than the fixed level-3 boundary (`1.4`).
     pub heading_size_ratio: f32,
+    /// Whether to detect bold formatting from font name and descriptor metrics.
+    /// When `false`, all spans have `bold = false` regardless of font data.
     pub detect_bold: bool,
+    /// Whether to detect italic formatting from font name and descriptor metrics.
+    /// When `false`, all spans have `italic = false` regardless of font data.
     pub detect_italic: bool,
 }
 
@@ -20,18 +29,27 @@ impl Default for DetectorConfig {
     }
 }
 
+/// A `RawTextSegment` paired with its structural classification.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassifiedSegment {
     pub segment: RawTextSegment,
     pub classification: SegmentClass,
 }
 
+/// The structural role of a text segment within the document.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SegmentClass {
+    /// A heading at the given level (1 = largest, 4 = smallest recognised heading).
     Heading(u8),
+    /// Regular body text.
     Body,
 }
 
+/// Compute the dominant ("body") font size across all segments using the mode.
+///
+/// Font sizes are bucketed at 0.01-point precision. On a tie, the smallest size
+/// wins — body text is typically the smallest repeated size in a document.
+/// Returns `12.0` when `segments` is empty.
 pub fn compute_body_size(segments: &[RawTextSegment]) -> f32 {
     if segments.is_empty() {
         return 12.0;
@@ -43,6 +61,9 @@ pub fn compute_body_size(segments: &[RawTextSegment]) -> f32 {
         *counts.entry(key).or_insert(0) += 1;
     }
 
+    // best_key starts at 1200 (12pt) so the very first entry always wins the
+    // count comparison (best_count == 0 < any real count), making the seed
+    // value irrelevant in practice.
     let mut best_key = 1200;
     let mut best_count = 0usize;
 
@@ -56,25 +77,39 @@ pub fn compute_body_size(segments: &[RawTextSegment]) -> f32 {
     best_key as f32 / 100.0
 }
 
+/// Classify each segment as `Body` or a heading level based on its font-size
+/// ratio relative to `body_size`.
+///
+/// Fixed level boundaries (ratios are relative to `body_size`):
+/// - ≥ 2.0 → `Heading(1)`
+/// - ≥ 1.7 → `Heading(2)`
+/// - ≥ 1.4 → `Heading(3)`
+/// - ≥ `heading_size_ratio` → `Heading(4)`
+/// - otherwise → `Body`
+///
+/// If `body_size` is zero or negative, falls back to 12.0 pt.
 pub fn detect_headings(
-    segments: &[RawTextSegment],
+    segments: Vec<RawTextSegment>,
     body_size: f32,
     heading_size_ratio: f32,
 ) -> Vec<ClassifiedSegment> {
     let safe_body = if body_size > 0.0 { body_size } else { 12.0 };
 
     segments
-        .iter()
-        .cloned()
+        .into_iter()
         .map(|segment| {
             let ratio = segment.font_size / safe_body;
             let classification = if ratio >= 2.0 {
+                // Level 1: at least double the body size
                 SegmentClass::Heading(1)
             } else if ratio >= 1.7 {
+                // Level 2: 70%+ larger than body
                 SegmentClass::Heading(2)
             } else if ratio >= 1.4 {
+                // Level 3: 40%+ larger than body
                 SegmentClass::Heading(3)
             } else if ratio >= heading_size_ratio {
+                // Level 4: exceeds the configurable minimum heading ratio
                 SegmentClass::Heading(4)
             } else {
                 SegmentClass::Body
@@ -88,22 +123,24 @@ pub fn detect_headings(
         .collect()
 }
 
-fn normalize_font_name(name: &str) -> String {
-    let lower = name.to_lowercase();
-    // Strip subset prefix (6 lowercase letters + '+')
-    if lower.len() >= 7
-        && lower.as_bytes()[6] == b'+'
-        && lower[..6].bytes().all(|b| b.is_ascii_lowercase())
-    {
-        lower[7..].to_string()
-    } else {
-        lower
-    }
-}
-
+/// Determine bold and italic flags from the font resource name and descriptor metrics.
+///
+/// Detection order:
+/// 1. Lowercase font name (subset prefix stripped) is scanned for `"bold"`,
+///    `"italic"`, `"oblique"`, and combined forms like `"bolditalic"`.
+/// 2. If bold is not found via name, `FontInfo::font_weight > 600` is used as
+///    a fallback.
+/// 3. If italic is not found via name, a non-zero `FontInfo::italic_angle` is
+///    used as a fallback.
+///
+/// Returns `(bold, italic)`.
 pub fn detect_formatting(font_name: &str, font_info: &FontInfo) -> (bool, bool) {
-    let normalized = normalize_font_name(font_name);
+    // Normalise: strip PDF subset prefix then lowercase for case-insensitive matching.
+    let stripped = strip_subset_prefix(font_name);
+    let normalized = stripped.to_lowercase();
 
+    // Combined forms must be checked first to avoid double-counting
+    // (e.g., "BoldOblique" contains both "bold" and "oblique").
     let has_bold_combo = normalized.contains("bolditalic") || normalized.contains("boldoblique");
     let mut bold = has_bold_combo || normalized.contains("bold");
     let mut italic =
@@ -123,6 +160,37 @@ pub fn detect_formatting(font_name: &str, font_info: &FontInfo) -> (bool, bool) 
     (bold, italic)
 }
 
+/// Flush the accumulated spans into an AST node and clear the accumulators.
+///
+/// No-op when `spans` is empty.
+fn flush_group(kind: &Option<SegmentClass>, spans: Vec<Span>, nodes: &mut Vec<Node>) {
+    if spans.is_empty() {
+        return;
+    }
+    match kind {
+        Some(SegmentClass::Heading(level)) => {
+            nodes.push(Node::Heading {
+                level: *level,
+                spans,
+            });
+        }
+        _ => {
+            nodes.push(Node::Paragraph { spans });
+        }
+    }
+}
+
+/// Build an AST `Document` from raw segments, font metadata, and configuration.
+///
+/// Algorithm:
+/// 1. Compute the body font size (mode of all segment sizes).
+/// 2. Classify every segment as a heading level or body text.
+/// 3. Group consecutive segments with the same classification into a single
+///    `Node::Heading` or `Node::Paragraph`.
+/// 4. Segments whose font resource name is absent from `fonts` are emitted as
+///    `Node::RawText` and contribute a `Warning::MissingFontMetrics`.
+///
+/// The returned `Vec<Warning>` is empty when all fonts are resolved.
 pub fn build_document(
     segments: Vec<RawTextSegment>,
     fonts: &HashMap<Vec<u8>, FontInfo>,
@@ -131,7 +199,7 @@ pub fn build_document(
 ) -> (Document, Vec<Warning>) {
     let mut warnings = Vec::new();
     let body_size = compute_body_size(&segments);
-    let classified = detect_headings(&segments, body_size, config.heading_size_ratio);
+    let classified = detect_headings(segments, body_size, config.heading_size_ratio);
 
     let mut nodes = Vec::new();
     let mut current_kind: Option<SegmentClass> = None;
@@ -141,22 +209,14 @@ pub fn build_document(
         let font = match fonts.get(&item.segment.font_resource_name) {
             Some(font) => font,
             None => {
-                // Flush any pending group before emitting RawText
-                if !current_spans.is_empty() {
-                    let spans = std::mem::take(&mut current_spans);
-                    match &current_kind {
-                        Some(SegmentClass::Heading(level)) => {
-                            nodes.push(Node::Heading {
-                                level: *level,
-                                spans,
-                            });
-                        }
-                        _ => {
-                            nodes.push(Node::Paragraph { spans });
-                        }
-                    }
-                    current_kind = None;
-                }
+                // Flush any pending group before emitting RawText so it lands
+                // as its own node rather than merging into a preceding group.
+                flush_group(
+                    &current_kind,
+                    std::mem::take(&mut current_spans),
+                    &mut nodes,
+                );
+                current_kind = None;
 
                 warnings.push(Warning::MissingFontMetrics {
                     font_name: String::from_utf8_lossy(&item.segment.font_resource_name)
@@ -184,48 +244,32 @@ pub fn build_document(
             font_name: Some(font.name.clone()),
         };
 
-        // Flush when classification changes
+        // Flush the current group when the classification changes.
         let same_class = match (&current_kind, &item.classification) {
             (Some(SegmentClass::Heading(a)), SegmentClass::Heading(b)) => a == b,
             (Some(SegmentClass::Body), SegmentClass::Body) => true,
-            (None, _) => true, // first item — no flush needed
+            (None, _) => true, // first item — nothing to flush
             _ => false,
         };
 
         if !same_class {
-            let spans = std::mem::take(&mut current_spans);
-            match &current_kind {
-                Some(SegmentClass::Heading(level)) => {
-                    nodes.push(Node::Heading {
-                        level: *level,
-                        spans,
-                    });
-                }
-                _ => {
-                    nodes.push(Node::Paragraph { spans });
-                }
-            }
+            flush_group(
+                &current_kind,
+                std::mem::take(&mut current_spans),
+                &mut nodes,
+            );
         }
 
         current_kind = Some(item.classification);
         current_spans.push(span);
     }
 
-    // Final flush
-    if !current_spans.is_empty() {
-        let spans = std::mem::take(&mut current_spans);
-        match &current_kind {
-            Some(SegmentClass::Heading(level)) => {
-                nodes.push(Node::Heading {
-                    level: *level,
-                    spans,
-                });
-            }
-            _ => {
-                nodes.push(Node::Paragraph { spans });
-            }
-        }
-    }
+    // Final flush for any trailing group.
+    flush_group(
+        &current_kind,
+        std::mem::take(&mut current_spans),
+        &mut nodes,
+    );
 
     (Document { metadata, nodes }, warnings)
 }
@@ -270,10 +314,11 @@ mod tests {
         entries.into_iter().collect()
     }
 
-    // ── compute_body_size tests ──
+    // ── compute_body_size ──────────────────────────────────────────────────────
 
     #[test]
     fn compute_body_size_uses_mode_with_smaller_tie_breaker() {
+        // Three sizes each appear twice: smallest (10.0) should win the tie.
         let segments = vec![
             seg("a", 12.0),
             seg("b", 12.0),
@@ -291,20 +336,21 @@ mod tests {
         assert_eq!(compute_body_size(&[]), 12.0);
     }
 
-    // ── detect_headings tests ──
+    // ── detect_headings ────────────────────────────────────────────────────────
 
     #[test]
     fn detect_headings_maps_ratios_to_levels_and_boundaries() {
         let body = 10.0;
+        // Exact boundary values per spec: 2.0, 1.7, 1.4, and heading_size_ratio (1.2).
         let segments = vec![
-            seg("h1", 20.0),
-            seg("h2", 17.0),
-            seg("h3", 14.0),
-            seg("h4", 12.0),
-            seg("body", 11.99),
+            seg("h1", 20.0),    // ratio 2.0 → Heading(1)
+            seg("h2", 17.0),    // ratio 1.7 → Heading(2)
+            seg("h3", 14.0),    // ratio 1.4 → Heading(3)
+            seg("h4", 12.0),    // ratio 1.2 → Heading(4)
+            seg("body", 11.99), // ratio < 1.2 → Body
         ];
 
-        let classes = detect_headings(&segments, body, 1.2)
+        let classes = detect_headings(segments, body, 1.2)
             .into_iter()
             .map(|c| c.classification)
             .collect::<Vec<_>>();
@@ -316,7 +362,7 @@ mod tests {
         assert_eq!(classes[4], SegmentClass::Body);
     }
 
-    // ── detect_formatting tests ──
+    // ── detect_formatting ──────────────────────────────────────────────────────
 
     #[test]
     fn detect_formatting_reads_font_name_patterns_and_subset_prefix() {
@@ -339,7 +385,7 @@ mod tests {
         assert_eq!(detect_formatting("CustomFont-Regular", &info), (true, true));
     }
 
-    // ── build_document tests ──
+    // ── build_document ─────────────────────────────────────────────────────────
 
     #[test]
     fn build_document_groups_consecutive_classification_and_preserves_spans() {
@@ -370,8 +416,29 @@ mod tests {
         assert!(warnings.is_empty());
         assert_eq!(doc.metadata, metadata);
         assert_eq!(doc.nodes.len(), 2);
-        assert!(matches!(doc.nodes[0], Node::Heading { level: 1, .. }));
-        assert!(matches!(doc.nodes[1], Node::Paragraph { .. }));
+
+        // Verify heading node: level and span texts
+        match &doc.nodes[0] {
+            Node::Heading { level, spans } => {
+                assert_eq!(*level, 1);
+                assert_eq!(spans.len(), 2);
+                assert_eq!(spans[0].text, "Chapter 1");
+                assert_eq!(spans[1].text, "Intro");
+                assert!(spans[0].bold);
+            }
+            other => panic!("expected Heading, got {:?}", other),
+        }
+
+        // Verify paragraph node: span texts
+        match &doc.nodes[1] {
+            Node::Paragraph { spans } => {
+                assert_eq!(spans.len(), 2);
+                assert_eq!(spans[0].text, "Body A");
+                assert_eq!(spans[1].text, "Body B");
+                assert!(!spans[0].bold);
+            }
+            other => panic!("expected Paragraph, got {:?}", other),
+        }
     }
 
     #[test]

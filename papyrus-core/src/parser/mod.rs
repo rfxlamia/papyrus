@@ -80,7 +80,11 @@ fn extract_font_descriptor_metrics(
 }
 
 /// Strip a 6-uppercase-letter subset prefix (e.g., "ABCDEF+Helvetica-Bold" -> "Helvetica-Bold").
-fn strip_subset_prefix(name: &str) -> &str {
+///
+/// PDF subset fonts embed the original font name after a 6-uppercase-letter tag
+/// and a `+` separator. Stripping this prefix recovers the canonical font name
+/// for pattern matching.
+pub(crate) fn strip_subset_prefix(name: &str) -> &str {
     if name.len() >= 7
         && name.as_bytes()[6] == b'+'
         && name[..6].bytes().all(|b| b.is_ascii_uppercase())

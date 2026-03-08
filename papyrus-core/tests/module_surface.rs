@@ -1,5 +1,5 @@
 use papyrus_core::detector::{ClassifiedSegment, DetectorConfig, SegmentClass};
-use papyrus_core::{detector, parser, renderer};
+use papyrus_core::{parser, renderer};
 
 #[test]
 fn module_surfaces_are_linked() {
