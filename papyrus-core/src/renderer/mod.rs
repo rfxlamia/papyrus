@@ -1,4 +1,4 @@
-use crate::ast::{Document, Span};
+use crate::ast::{Document, Node, Span};
 
 // ── Private helpers ──────────────────────────────────────────────────────────
 
@@ -20,14 +20,21 @@ fn escape_text(input: &str) -> String {
 // ── Crate-internal rendering ─────────────────────────────────────────────────
 
 pub(crate) fn render_span(span: &Span) -> String {
+    if !span.bold && !span.italic {
+        // Plain spans: preserve text as-is (inter-word spaces are intentional),
+        // but return empty if there is truly no content at all.
+        if span.text.is_empty() {
+            return String::new();
+        }
+        return escape_text(&span.text);
+    }
+
+    // Formatted spans: trim surrounding whitespace before wrapping in markers
+    // so we never produce "  **bold**  " which CommonMark parsers may reject.
     let core = span.text.trim();
 
     if core.is_empty() {
         return String::new();
-    }
-
-    if !span.bold && !span.italic {
-        return escape_text(core);
     }
 
     let marker = match (span.bold, span.italic) {
@@ -38,6 +45,40 @@ pub(crate) fn render_span(span: &Span) -> String {
     };
 
     format!("{marker}{}{marker}", escape_text(core))
+}
+
+fn render_spans(spans: &[Span]) -> String {
+    spans
+        .iter()
+        .map(render_span)
+        .filter(|s| !s.is_empty())
+        .collect::<String>()
+}
+
+fn trim_trailing_ws_per_line(input: &str) -> String {
+    input
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn render_node(node: &Node) -> String {
+    match node {
+        Node::Heading { level, spans } => {
+            let hashes = "#".repeat((*level).clamp(1, 6) as usize);
+            let text = trim_trailing_ws_per_line(&render_spans(spans));
+            format!("{hashes} {text}\n\n")
+        }
+        Node::Paragraph { spans } => {
+            let text = trim_trailing_ws_per_line(&render_spans(spans));
+            format!("{text}\n\n")
+        }
+        Node::RawText(text) => {
+            let cleaned = trim_trailing_ws_per_line(text);
+            format!("{cleaned}\n\n")
+        }
+    }
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -51,7 +92,7 @@ pub fn render_document(_document: &Document) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Span;
+    use crate::ast::{Node, Span};
 
     fn span(text: &str, bold: bool, italic: bool) -> Span {
         Span {
@@ -62,6 +103,8 @@ mod tests {
             font_name: None,
         }
     }
+
+    // ── escape_text ──────────────────────────────────────────────────────────
 
     #[test]
     fn escape_text_escapes_all_commonmark_special_chars() {
@@ -75,18 +118,25 @@ mod tests {
         assert_eq!(escape_text("Papyrus Renderer 123"), "Papyrus Renderer 123");
     }
 
+    // ── render_span ──────────────────────────────────────────────────────────
+
     #[test]
     fn render_span_supports_plain_bold_italic_and_bold_italic() {
         assert_eq!(render_span(&span("plain", false, false)), "plain");
         assert_eq!(render_span(&span("bold", true, false)), "**bold**");
         assert_eq!(render_span(&span("italic", false, true)), "*italic*");
         assert_eq!(render_span(&span("both", true, true)), "***both***");
-        // plain spans also trim surrounding whitespace
-        assert_eq!(render_span(&span("  plain  ", false, false)), "plain");
     }
 
     #[test]
-    fn render_span_drops_empty_formatted_output() {
+    fn render_span_plain_preserves_whitespace_for_inter_word_spacing() {
+        // Space-only plain spans are intentional inter-word separators.
+        assert_eq!(render_span(&span(" ", false, false)), " ");
+        assert_eq!(render_span(&span("  hello  ", false, false)), "  hello  ");
+    }
+
+    #[test]
+    fn render_span_drops_empty_and_whitespace_only_formatted_output() {
         assert_eq!(render_span(&span("", true, false)), "");
         assert_eq!(render_span(&span("   ", true, true)), "");
     }
@@ -98,5 +148,33 @@ mod tests {
             "**bold me**"
         );
         assert_eq!(render_span(&span("\tbold\t", false, true)), "*bold*");
+    }
+
+    // ── render_node ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn render_node_heading_uses_hash_prefix_and_blank_line() {
+        let node = Node::Heading {
+            level: 3,
+            spans: vec![span("Heading", false, false)],
+        };
+        assert_eq!(render_node(&node), "### Heading\n\n");
+    }
+
+    #[test]
+    fn render_node_paragraph_joins_spans_without_extra_spaces() {
+        let node = Node::Paragraph {
+            spans: vec![
+                span("Hello", false, false),
+                span(" ", false, false),
+                span("world", true, false),
+            ],
+        };
+        assert_eq!(render_node(&node), "Hello **world**\n\n");
+    }
+
+    #[test]
+    fn render_node_raw_text_passthrough_appends_blank_line() {
+        assert_eq!(render_node(&Node::RawText("raw".to_string())), "raw\n\n");
     }
 }
