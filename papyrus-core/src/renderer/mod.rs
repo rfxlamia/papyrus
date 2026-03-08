@@ -1,38 +1,6 @@
 use crate::ast::{Document, Span};
 
-pub fn render_document(_document: &Document) -> String {
-    String::new()
-}
-
-pub(crate) fn render_span(span: &Span) -> String {
-    if span.text.is_empty() {
-        return String::new();
-    }
-
-    if !span.bold && !span.italic {
-        return escape_text(&span.text);
-    }
-
-    let leading_len = span.text.len() - span.text.trim_start().len();
-    let trailing_len = span.text.len() - span.text.trim_end().len();
-    let leading = &span.text[..leading_len];
-    let trailing = &span.text[span.text.len() - trailing_len..];
-    let core = span.text.trim();
-
-    if core.is_empty() {
-        return String::new();
-    }
-
-    let marker = match (span.bold, span.italic) {
-        (true, true) => "***",
-        (true, false) => "**",
-        (false, true) => "*",
-        (false, false) => "",
-    };
-
-    let escaped_core = escape_text(core);
-    format!("{leading}{marker}{escaped_core}{marker}{trailing}")
-}
+// ── Private helpers ──────────────────────────────────────────────────────────
 
 fn escape_text(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -48,6 +16,37 @@ fn escape_text(input: &str) -> String {
     }
     out
 }
+
+// ── Crate-internal rendering ─────────────────────────────────────────────────
+
+pub(crate) fn render_span(span: &Span) -> String {
+    let core = span.text.trim();
+
+    if core.is_empty() {
+        return String::new();
+    }
+
+    if !span.bold && !span.italic {
+        return escape_text(core);
+    }
+
+    let marker = match (span.bold, span.italic) {
+        (true, true) => "***",
+        (true, false) => "**",
+        (false, true) => "*",
+        (false, false) => unreachable!("plain spans return early above"),
+    };
+
+    format!("{marker}{}{marker}", escape_text(core))
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+pub fn render_document(_document: &Document) -> String {
+    String::new()
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -65,7 +64,7 @@ mod tests {
     }
 
     #[test]
-    fn escape_text_escapes_all_phase4_commonmark_special_chars() {
+    fn escape_text_escapes_all_commonmark_special_chars() {
         let raw = r"\`*_{}[]()#+-.!|";
         let escaped = escape_text(raw);
         assert_eq!(escaped, r"\\\`\*\_\{\}\[\]\(\)\#\+\-\.\!\|");
@@ -82,6 +81,8 @@ mod tests {
         assert_eq!(render_span(&span("bold", true, false)), "**bold**");
         assert_eq!(render_span(&span("italic", false, true)), "*italic*");
         assert_eq!(render_span(&span("both", true, true)), "***both***");
+        // plain spans also trim surrounding whitespace
+        assert_eq!(render_span(&span("  plain  ", false, false)), "plain");
     }
 
     #[test]
@@ -91,10 +92,11 @@ mod tests {
     }
 
     #[test]
-    fn render_span_trims_whitespace_inside_markers_only() {
+    fn render_span_trims_surrounding_whitespace_before_applying_markers() {
         assert_eq!(
             render_span(&span("  bold me  ", true, false)),
-            "  **bold me**  "
+            "**bold me**"
         );
+        assert_eq!(render_span(&span("\tbold\t", false, true)), "*bold*");
     }
 }

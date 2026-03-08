@@ -27,16 +27,16 @@ fn module_surfaces_are_linked() {
     assert!(metadata.title.is_none());
     assert!(metadata.author.is_none());
 
-    // renderer now exposes render_document; verify it returns empty for empty input
-    let empty_doc = papyrus_core::ast::Document {
-        metadata: papyrus_core::ast::DocumentMetadata {
+    // renderer::render_document is covered by renderer_surface_exposes_document_entrypoint;
+    // confirm it compiles and links correctly here too.
+    let markdown = renderer::render_document(&Document {
+        metadata: DocumentMetadata {
             title: None,
             author: None,
             page_count: 0,
         },
         nodes: vec![],
-    };
-    let markdown = renderer::render_document(&empty_doc);
+    });
     assert!(markdown.is_empty());
 
     // Incomplete PDF header may produce MalformedPdfObject warnings once
