@@ -71,12 +71,7 @@ impl Papyrus {
     /// [`ast::Warning`] values in the returned [`ConversionResult`] rather
     /// than surfaced as errors.
     pub fn extract(&self, pdf_bytes: &[u8]) -> ConversionResult {
-        let (segments, metadata, mut warnings) = parser::parse_pdf(pdf_bytes);
-        let fonts = collect_fonts_for_segments(pdf_bytes, &segments);
-        let (document, detector_warnings) =
-            build_document(segments, &fonts, &self.config, metadata);
-        warnings.extend(detector_warnings);
-        ConversionResult { document, warnings }
+        extract_with_config(pdf_bytes, &self.config)
     }
 }
 
@@ -84,34 +79,136 @@ impl Papyrus {
 ///
 /// Equivalent to `Papyrus::builder().build().extract(pdf_bytes)`.
 pub fn convert(pdf_bytes: &[u8]) -> ConversionResult {
-    Papyrus::builder().build().extract(pdf_bytes)
+    extract_with_config(pdf_bytes, &DetectorConfig::default())
 }
 
-/// Resolve font metadata for every page that appears in `segments`.
+/// Core single-pass extraction: load PDF once, resolve fonts and text per page
+/// in one pass, then run the detector.
 ///
-/// Loads the PDF once and queries each unique page number. Font resource names
-/// from different pages that share a name will be merged (last-page wins for
-/// duplicate resource keys, which is safe because resource names are
-/// per-page-local in the PDF spec).
-fn collect_fonts_for_segments(
-    pdf_bytes: &[u8],
-    segments: &[parser::RawTextSegment],
-) -> HashMap<Vec<u8>, parser::FontInfo> {
-    let mut fonts = HashMap::new();
-    let (doc_opt, _) = parser::load_pdf(pdf_bytes);
-    let Some(doc) = doc_opt else {
-        return fonts;
+/// This is the shared implementation for both [`Papyrus::extract`] and
+/// [`convert`]. Keeping it here avoids a redundant `Papyrus::builder().build()`
+/// allocation in the hot path.
+fn extract_with_config(pdf_bytes: &[u8], config: &DetectorConfig) -> ConversionResult {
+    use ast::{DocumentMetadata, Warning};
+
+    let mut all_warnings: Vec<Warning> = Vec::new();
+
+    // Step 1: Load PDF — one load for the entire extraction.
+    let (doc_opt, load_warnings) = parser::load_pdf(pdf_bytes);
+    all_warnings.extend(load_warnings);
+
+    let doc = match doc_opt {
+        Some(d) => d,
+        None => {
+            let (document, _) = build_document(
+                Vec::new(),
+                &HashMap::new(),
+                config,
+                DocumentMetadata {
+                    title: None,
+                    author: None,
+                    page_count: 0,
+                },
+            );
+            return ConversionResult {
+                document,
+                warnings: all_warnings,
+            };
+        }
     };
 
-    // Deduplicate page numbers so we only call resolve_fonts_for_page once per page.
-    let mut pages = segments.iter().map(|s| s.page_number).collect::<Vec<_>>();
-    pages.sort_unstable();
-    pages.dedup();
+    // Step 2: Metadata.
+    let pages = doc.get_pages();
+    let page_count = pages.len();
+    let (title, author) = parser::extract_doc_info_pub(&doc);
+    let metadata = DocumentMetadata {
+        title,
+        author,
+        page_count,
+    };
 
-    for page in pages {
-        let (page_fonts, _) = parser::resolve_fonts_for_page(&doc, page);
-        fonts.extend(page_fonts);
+    // Step 3: Per-page font resolution + text extraction in a single pass.
+    // Fonts are keyed by (page_number, resource_name) to avoid cross-page
+    // collisions when two pages share the same resource name (e.g., both use
+    // "F1" for different physical fonts).
+    let mut page_fonts_map: HashMap<(usize, Vec<u8>), parser::FontInfo> = HashMap::new();
+    let mut all_segments: Vec<parser::RawTextSegment> = Vec::new();
+
+    let mut page_numbers: Vec<u32> = pages.keys().copied().collect();
+    page_numbers.sort();
+
+    for &page_num in &page_numbers {
+        let page_number = page_num as usize;
+
+        let (fonts, font_warnings) = parser::resolve_fonts_for_page(&doc, page_number);
+        all_warnings.extend(font_warnings);
+
+        // Store fonts under (page, resource_name) key.
+        for (resource_name, font_info) in fonts {
+            page_fonts_map.insert((page_number, resource_name), font_info);
+        }
+
+        let (segments, extract_warnings) =
+            parser::extract_text_segments_for_page(&doc, page_number, &HashMap::new());
+        all_warnings.extend(extract_warnings);
+        all_segments.extend(segments);
     }
 
-    fonts
+    // Build a flat resource-name → FontInfo map for build_document.
+    // Since segments carry their page number, we look up the correct font
+    // per (page, resource_name) and flatten into a per-segment map.
+    let segment_fonts = build_segment_font_map(&all_segments, &page_fonts_map, &mut all_warnings);
+
+    // Step 4: Detect structure and build AST.
+    let (document, detector_warnings) =
+        build_document(all_segments, &segment_fonts, config, metadata);
+    all_warnings.extend(detector_warnings);
+
+    ConversionResult {
+        document,
+        warnings: all_warnings,
+    }
+}
+
+/// Build a `font_resource_name → FontInfo` map for use in `build_document`.
+///
+/// Iterates over all segments and looks up each `(page_number, resource_name)`
+/// pair from the pre-resolved `page_fonts_map`. The result is a flat map keyed
+/// only by `resource_name` (matching `build_document`'s lookup key).
+///
+/// **Known limitation:** `build_document` keys fonts by resource name alone, so
+/// if two pages use the same resource name (e.g., `F1`) for different physical
+/// fonts, the last writer wins. This matches the behaviour of `parser::parse_pdf`
+/// and is acceptable for the current single-pass architecture. A future
+/// improvement would thread the page number through to `build_document`.
+///
+/// Missing entries emit `Warning::MissingFontMetrics`, deduplicated per
+/// resource name to avoid warning spam on multi-segment pages.
+fn build_segment_font_map(
+    segments: &[parser::RawTextSegment],
+    page_fonts_map: &HashMap<(usize, Vec<u8>), parser::FontInfo>,
+    warnings: &mut Vec<ast::Warning>,
+) -> HashMap<Vec<u8>, parser::FontInfo> {
+    let mut result: HashMap<Vec<u8>, parser::FontInfo> = HashMap::new();
+    let mut warned: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+
+    for segment in segments {
+        let key = (segment.page_number, segment.font_resource_name.clone());
+        match page_fonts_map.get(&key) {
+            Some(font_info) => {
+                // Last-page-wins on collision, consistent with parse_pdf behaviour.
+                result.insert(segment.font_resource_name.clone(), font_info.clone());
+            }
+            None => {
+                if warned.insert(segment.font_resource_name.clone()) {
+                    warnings.push(ast::Warning::MissingFontMetrics {
+                        font_name: String::from_utf8_lossy(&segment.font_resource_name).to_string(),
+                        page: segment.page_number,
+                    });
+                }
+            }
+        }
+    }
+
+    result
 }

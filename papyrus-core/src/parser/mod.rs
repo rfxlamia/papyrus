@@ -520,6 +520,11 @@ pub fn parse_pdf(bytes: &[u8]) -> (Vec<RawTextSegment>, DocumentMetadata, Vec<Wa
     (all_segments, metadata, all_warnings)
 }
 
+/// Public crate accessor for doc info extraction, used by `lib.rs` single-pass pipeline.
+pub(crate) fn extract_doc_info_pub(doc: &lopdf::Document) -> (Option<String>, Option<String>) {
+    extract_doc_info(doc)
+}
+
 /// Extract title and author from PDF info dictionary.
 fn extract_doc_info(doc: &lopdf::Document) -> (Option<String>, Option<String>) {
     // Try the trailer's /Info reference
