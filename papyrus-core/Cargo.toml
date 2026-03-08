@@ -2,6 +2,12 @@
 name = "papyrus-core"
 version = "0.1.0"
 edition = "2021"
+authors = ["rfxlamia"]
+description = "PDF-to-Markdown conversion engine with smart heading detection, bold/italic text extraction, and CommonMark output. Pure Rust, best-effort parsing for corrupted PDFs."
+repository = "https://github.com/rfxlamia/papyrus"
+license = "MIT OR Apache-2.0"
+keywords = ["pdf", "markdown", "extract", "convert", "text-extraction"]
+categories = ["text-processing", "parser-implementations", "encoding"]
 
 [dependencies]
 lopdf = "0.35"
