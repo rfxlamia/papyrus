@@ -2,6 +2,10 @@
 
 > PDF-to-Markdown conversion that understands document structure.
 
+[![Crates.io](https://img.shields.io/crates/v/papyrus-cli)](https://crates.io/crates/papyrus-cli)
+[![Crates.io (core)](https://img.shields.io/crates/v/papyrus-core?label=core)](https://crates.io/crates/papyrus-core)
+[![docs.rs](https://docs.rs/papyrus-core/badge.svg)](https://docs.rs/papyrus-core)
+
 Papyrus extracts text from PDFs and converts it to clean, structured Markdown. It detects headings, bold, and italic formatting—producing CommonMark output that works with LLMs, knowledge bases, and Markdown-based tools.
 
 ## Features
@@ -20,7 +24,7 @@ Papyrus extracts text from PDFs and converts it to clean, structured Markdown. I
 Requires Rust 1.70+:
 
 ```bash
-git clone https://github.com/yourusername/papyrus.git
+git clone https://github.com/rfxlamia/papyrus.git
 cd papyrus
 cargo build --release
 ```
@@ -128,4 +132,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, architecture ove
 
 ## License
 
-MIT — See [LICENSE](./LICENSE) for details.
+MIT OR Apache-2.0 — See [LICENSE-MIT](./LICENSE-MIT) or [LICENSE-APACHE](./LICENSE-APACHE) for details.
