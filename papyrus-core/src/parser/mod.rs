@@ -9,6 +9,10 @@ pub struct FontInfo {
     pub name: String,
     /// Optional font size from the font descriptor (diagnostic only; Tf state is authoritative).
     pub size: Option<f32>,
+    /// FontWeight from the font descriptor (e.g., 700 = bold). None if not present.
+    pub font_weight: Option<f32>,
+    /// ItalicAngle from the font descriptor. Non-zero indicates italic/oblique. None if not present.
+    pub italic_angle: Option<f32>,
 }
 
 /// A single text segment extracted from a PDF content stream.
@@ -46,6 +50,33 @@ pub fn load_pdf(bytes: &[u8]) -> (Option<lopdf::Document>, Vec<Warning>) {
             }],
         ),
     }
+}
+
+/// Extract FontWeight and ItalicAngle from a font's FontDescriptor dictionary.
+///
+/// Returns `(font_weight, italic_angle)` — either may be None if the descriptor
+/// is absent or the key is missing.
+fn extract_font_descriptor_metrics(
+    doc: &lopdf::Document,
+    font_dict: &lopdf::Dictionary,
+) -> (Option<f32>, Option<f32>) {
+    let descriptor = font_dict
+        .get(b"FontDescriptor")
+        .ok()
+        .and_then(|obj| match obj {
+            lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
+            other => Some(other),
+        })
+        .and_then(|obj| obj.as_dict().ok());
+
+    let Some(desc) = descriptor else {
+        return (None, None);
+    };
+
+    let font_weight = desc.get(b"FontWeight").ok().and_then(extract_number);
+    let italic_angle = desc.get(b"ItalicAngle").ok().and_then(extract_number);
+
+    (font_weight, italic_angle)
 }
 
 /// Strip a 6-uppercase-letter subset prefix (e.g., "ABCDEF+Helvetica-Bold" -> "Helvetica-Bold").
@@ -140,11 +171,15 @@ pub fn resolve_fonts_for_page(
         // /FontSize key, so we leave this as None. It may be populated by future
         // heuristics if needed.
 
+        let (font_weight, italic_angle) = extract_font_descriptor_metrics(doc, &font_dict);
+
         fonts.insert(
             resource_name,
             FontInfo {
                 name: base_font_name,
                 size: None,
+                font_weight,
+                italic_angle,
             },
         );
     }
