@@ -151,14 +151,11 @@ fn assert_oracle_match(fixture_name: &str, base_name: &str) {
 
     // 4. No critical warnings for valid PDFs
     for w in &warnings {
-        match w {
-            Warning::UnreadableTextStream { page, detail } => {
-                panic!(
-                    "[{}] unexpected UnreadableTextStream on page {}: {}",
-                    base_name, page, detail
-                );
-            }
-            _ => {}
+        if let Warning::UnreadableTextStream { page, detail } = w {
+            panic!(
+                "[{}] unexpected UnreadableTextStream on page {}: {}",
+                base_name, page, detail
+            );
         }
     }
 }

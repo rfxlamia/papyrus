@@ -220,7 +220,7 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
     // it's likely UTF-16BE (common in CIDFont text). Note: per PDF spec §7.9.2.2,
     // UTF-16BE is formally identified only by the BOM. This heuristic is a pragmatic
     // best-effort for spec-violating PDFs.
-    if bytes.len() >= 2 && bytes.len() % 2 == 0 && bytes[0] == 0x00 {
+    if bytes.len() >= 2 && bytes.len().is_multiple_of(2) && bytes[0] == 0x00 {
         return decode_utf16be(bytes);
     }
 
@@ -594,11 +594,8 @@ mod tests {
         assert!(doc.is_some(), "valid PDF should produce a document");
         // A valid, well-formed PDF should not produce MalformedPdfObject warnings
         for w in &warnings {
-            match w {
-                Warning::MalformedPdfObject { .. } => {
-                    panic!("valid PDF should not produce MalformedPdfObject warning");
-                }
-                _ => {}
+            if let Warning::MalformedPdfObject { .. } = w {
+                panic!("valid PDF should not produce MalformedPdfObject warning");
             }
         }
     }
