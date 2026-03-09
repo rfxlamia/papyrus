@@ -1,7 +1,7 @@
 # Papyrus: Current Status and Known Limitations
 
 **Last Updated:** 2026-03-09  
-**Version:** 0.1.0
+**Version:** 0.1.1 (dev — unreleased)
 
 ## Executive Summary
 
@@ -13,7 +13,7 @@ Papyrus is a Rust-based PDF-to-Markdown converter that successfully extracts tex
 - ✅ Project structure with `papyrus-core` and `papyrus-cli` crates
 - ✅ Oracle-based testing infrastructure using PyMuPDF as ground truth
 - ✅ Test fixtures for simple, multi-page, bold/italic, and corrupted PDFs
-- ✅ Comprehensive test coverage (110 tests passing)
+- ✅ Comprehensive test coverage (131 tests passing)
 
 ### Phase 2: Low-Level Extraction (Completed)
 - ✅ PDF loading and validation with error handling
@@ -58,35 +58,41 @@ Papyrus is a Rust-based PDF-to-Markdown converter that successfully extracts tex
   - Now uses positioning heuristics to detect word boundaries
   - Tested successfully on "Attention Is All You Need" paper (2.2MB, 13 pages)
 
+### Position-Aware Extraction (v0.1.1 work, 2026-03-09)
+- ✅ **TextState machine** — tracks PDF text matrix (`Tm`, `Td`, `TD`, `T*`, `TL` operators)
+- ✅ **Absolute coordinates** — every `RawTextSegment` now carries `x`, `y`, `is_rotated`
+- ✅ **Spatial layout module** (`papyrus-core/src/layout/`) with:
+  - Y-grouping: segments within `font_size * 0.5` tolerance merged into same line
+  - X-gap word spacing: space inserted when gap exceeds `font_size * 0.3 * 0.8`
+  - Paragraph detection: blank segment inserted when Y-gap > `median_line_height * 1.5`
+  - Rotated text quarantine: flagged as `Warning::RotatedTextDetected`
+- ✅ **Image-only page detection**: empty pages emit `Warning::ImageOnlyPage`
+- ✅ **Pipeline integration**: layout runs between raw extraction and AST build
+- ✅ **Hypothesis verification**: H1 (Tm coordinates plausible) and H6 (X-cursor advancement) confirmed with integration tests
+
 ## Known Limitations
 
 ### 1. Text Extraction Quality
 
 #### Word Spacing Heuristics
-**Status:** Partially solved, but not perfect
+**Status:** Partially solved — improved in v0.1.1 but still imperfect
 
-Our current approach uses a threshold of `-100` for positioning adjustments in TJ arrays to detect word boundaries. This works well for many PDFs but has limitations:
+Word spacing now uses two mechanisms:
+1. **TJ array**: displacement threshold of `font_size * 0.3` to detect intentional gaps
+2. **X-gap analysis**: post-layout check — inserts space between segments when X-gap exceeds `space_width * 0.8`
 
-- **Issue:** The threshold is a heuristic that may not work for all PDF generators
-- **Impact:** Some PDFs may have missing spaces or extra spaces
-- **Comparison:** PyMuPDF uses more sophisticated layout analysis and glyph positioning
-- **Example:** Complex layouts with multiple columns or unusual kerning may not extract perfectly
-
-**Why PyMuPDF is better:**
-- Uses actual glyph bounding boxes and spatial analysis
-- Considers font metrics and character widths
-- Has years of refinement across thousands of PDF variations
+Remaining issues:
+- **Junction gaps**: when a PDF line wraps, the last word of line N and first word of line N+1 lose the space between them (e.g., `orconvolutional` instead of `or convolutional`). Root cause: the PDF stores each visual line as a separate text object; word boundary at the junction is not encoded in the TJ/Tj data.
+- **Impact:** Multi-line paragraphs in academic papers show missing spaces at line boundaries — still readable but not clean
+- **Fix planned:** v0.1.2 — use actual font metrics (character advance widths from the font dictionary) to estimate end-X of each word more precisely, closing junction gaps
 
 #### Line and Paragraph Detection
-**Status:** Not implemented
+**Status:** Implemented in v0.1.1, partially working
 
-- **Issue:** We don't detect line breaks or paragraph boundaries
-- **Impact:** All text within a heading or body section is concatenated
-- **Comparison:** PyMuPDF can detect:
-  - Line breaks based on vertical positioning
-  - Paragraph boundaries using spacing analysis
-  - Column layouts and reading order
-- **Example:** Multi-column academic papers may have text from different columns mixed together
+- ✅ **Section breaks** between heading and body: working (headings and body text on separate lines)
+- ✅ **Paragraph breaks** within body text: working for large Y-gaps
+- ⚠️ **Within-paragraph line wraps**: body text lines that are wrapped (close Y-gap) are concatenated into one paragraph block, but word boundary at the wrap junction is missing a space
+- ❌ **Multi-column layouts**: reading order not detected — text from adjacent columns can interleave
 
 ### 2. Layout Analysis
 
@@ -216,16 +222,18 @@ Not supported:
 | Feature | Papyrus | PyMuPDF | pdfplumber |
 |---------|---------|---------|------------|
 | Basic text extraction | ✅ Good | ✅ Excellent | ✅ Excellent |
-| Word spacing | ⚠️ Heuristic | ✅ Accurate | ✅ Accurate |
+| Word spacing | ⚠️ Heuristic (junction gaps) | ✅ Accurate | ✅ Accurate |
+| Line break detection | ✅ Yes (v0.1.1) | ✅ Yes | ✅ Yes |
+| Paragraph detection | ⚠️ Partial (v0.1.1) | ✅ Yes | ✅ Yes |
 | Heading detection | ✅ Yes | ❌ No | ❌ No |
 | Bold/italic detection | ✅ Yes | ✅ Yes | ⚠️ Limited |
 | Markdown output | ✅ Yes | ❌ No | ❌ No |
 | Table extraction | ❌ No | ✅ Yes | ✅ Excellent |
 | Image extraction | ❌ No | ✅ Yes | ✅ Yes |
-| Layout analysis | ❌ No | ✅ Yes | ✅ Yes |
+| Multi-column layout | ❌ No | ✅ Yes | ✅ Yes |
 | Math formulas | ❌ No | ❌ No | ❌ No |
 | Metadata | ⚠️ Basic | ✅ Complete | ✅ Complete |
-| Performance | ⚠️ Untested | ✅ Excellent | ⚠️ Good |
+| Position tracking | ✅ Yes (v0.1.1) | ✅ Yes | ✅ Yes |
 | Error recovery | ⚠️ Basic | ✅ Excellent | ✅ Good |
 
 ## Use Cases
@@ -249,15 +257,15 @@ Not supported:
 ## Future Improvement Opportunities
 
 ### High Priority
-1. **Improve word spacing detection**
-   - Analyze glyph bounding boxes
-   - Use font metrics for character widths
-   - Implement adaptive thresholds per font
+1. **Fix junction word spacing** (v0.1.2)
+   - Use actual character advance widths from font dictionary
+   - Eliminate missing spaces at PDF line-wrap boundaries
+   - Implement per-font space width metrics
 
-2. **Line break detection**
-   - Track vertical positioning
-   - Detect paragraph boundaries
-   - Handle multi-column layouts
+2. **Multi-column layout** (v0.2.0)
+   - Detect column boundaries from X-position clustering
+   - Reconstruct correct reading order
+   - Handle academic 2-column papers
 
 3. **Table detection**
    - Identify grid structures
