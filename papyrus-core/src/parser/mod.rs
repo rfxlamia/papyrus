@@ -283,9 +283,121 @@ fn decode_utf16be(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Estimate the width of a text string in user-space units.
+///
+/// Uses char count * font_size * 0.6 as a rough approximation.
+/// Will be replaced by actual font metrics in v0.1.2 (H3).
+fn estimate_string_width(text: &str, font_size: f32) -> f32 {
+    text.chars().count() as f32 * font_size * 0.6
+}
+
+/// Tracks the current text position state within a PDF content stream.
+///
+/// Implements the subset of the PDF text state machine needed for position
+/// extraction: Tm, Td, TD, T*, and cursor advancement after Tj/TJ.
+#[derive(Debug, Clone)]
+pub(crate) struct TextState {
+    /// Current X cursor position in user space.
+    pub current_x: f32,
+    /// Current Y baseline position in user space.
+    pub current_y: f32,
+    /// X position of the start of the current line (for T* reset).
+    line_start_x: f32,
+    /// Y position of the start of the current line (for T* reset).
+    line_start_y: f32,
+    /// Text leading (TL), used by T* and TD operators.
+    tl: f32,
+    /// Text matrix parameters [a, b, c, d] for rotation detection.
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+}
+
+impl TextState {
+    pub fn new() -> Self {
+        Self {
+            current_x: 0.0,
+            current_y: 0.0,
+            line_start_x: 0.0,
+            line_start_y: 0.0,
+            tl: 0.0,
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+        }
+    }
+
+    /// Set text matrix from Tm operator: Tm a b c d e f
+    pub fn set_matrix(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        self.a = a;
+        self.b = b;
+        self.c = c;
+        self.d = d;
+        self.current_x = e;
+        self.current_y = f;
+        self.line_start_x = e;
+        self.line_start_y = f;
+    }
+
+    /// Apply Td offset: Td tx ty
+    pub fn apply_td(&mut self, tx: f32, ty: f32) {
+        self.current_x = self.line_start_x + tx;
+        self.current_y = self.line_start_y + ty;
+        self.line_start_x = self.current_x;
+        self.line_start_y = self.current_y;
+    }
+
+    /// Apply TD offset (same as Td but also sets TL = -ty)
+    pub fn apply_td_upper(&mut self, tx: f32, ty: f32) {
+        self.tl = -ty;
+        self.apply_td(tx, ty);
+    }
+
+    /// Apply T* (move to start of next line)
+    pub fn apply_t_star(&mut self) {
+        self.apply_td(0.0, -self.tl);
+    }
+
+    /// Set text leading (TL parameter)
+    pub fn set_tl(&mut self, tl: f32) {
+        self.tl = tl;
+    }
+
+    /// Advance X cursor after printing text of the given width.
+    pub fn advance_x(&mut self, width: f32) {
+        self.current_x += width;
+    }
+
+    /// Adjust X cursor for TJ positioning number.
+    /// Negative numbers move right (create space), positive move left (tighten).
+    pub fn adjust_tj(&mut self, displacement: f32, font_size: f32) {
+        self.current_x -= (displacement / 1000.0) * font_size;
+    }
+
+    /// Returns true if the current text matrix has rotation (b or c non-zero).
+    pub fn is_rotated(&self) -> bool {
+        self.b.abs() > 0.001 || self.c.abs() > 0.001
+    }
+
+    /// Reset state for a new BT (begin text object).
+    pub fn reset_for_bt(&mut self) {
+        self.current_x = 0.0;
+        self.current_y = 0.0;
+        self.line_start_x = 0.0;
+        self.line_start_y = 0.0;
+        self.a = 1.0;
+        self.b = 0.0;
+        self.c = 0.0;
+        self.d = 1.0;
+        // Note: TL persists across text objects per PDF spec §9.3.5
+    }
+}
+
 /// Extract raw text segments from a page's content stream.
 ///
-/// Processes Tf, Tj, TJ, BT, and ET operators.
+/// Processes Tf, Tj, TJ, BT, and ET operators with position tracking.
 /// `page_number` is 1-based.
 pub fn extract_text_segments_for_page(
     doc: &lopdf::Document,
@@ -1195,5 +1307,84 @@ mod tests {
     #[test]
     fn strip_subset_prefix_leaves_empty_string() {
         assert_eq!(strip_subset_prefix(""), "");
+    }
+
+    // ── TextState ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn text_state_tracks_tm_operator() {
+        let mut state = TextState::new();
+        state.set_matrix(1.0, 0.0, 0.0, 1.0, 72.0, 700.0);
+        assert_eq!(state.current_x, 72.0);
+        assert_eq!(state.current_y, 700.0);
+        assert!(!state.is_rotated());
+    }
+
+    #[test]
+    fn text_state_detects_rotation() {
+        let mut state = TextState::new();
+        state.set_matrix(0.0, 1.0, -1.0, 0.0, 100.0, 200.0);
+        assert!(state.is_rotated());
+    }
+
+    #[test]
+    fn text_state_applies_td_offset() {
+        let mut state = TextState::new();
+        state.set_matrix(1.0, 0.0, 0.0, 1.0, 72.0, 700.0);
+        state.apply_td(10.0, -14.0);
+        assert_eq!(state.current_x, 82.0);
+        assert_eq!(state.current_y, 686.0);
+    }
+
+    #[test]
+    fn text_state_t_star_resets_x_and_decrements_y_by_tl() {
+        let mut state = TextState::new();
+        state.set_matrix(1.0, 0.0, 0.0, 1.0, 72.0, 700.0);
+        state.set_tl(14.0);
+        state.apply_t_star();
+        assert_eq!(state.current_x, 72.0);
+        assert_eq!(state.current_y, 686.0);
+    }
+
+    #[test]
+    fn text_state_advance_x_after_tj() {
+        let mut state = TextState::new();
+        state.set_matrix(1.0, 0.0, 0.0, 1.0, 72.0, 700.0);
+        state.advance_x(30.0);
+        assert_eq!(state.current_x, 102.0);
+    }
+
+    #[test]
+    fn text_state_adjust_tj_displacement() {
+        let mut state = TextState::new();
+        state.set_matrix(1.0, 0.0, 0.0, 1.0, 72.0, 700.0);
+        // TJ number -200 with font_size 10 → offset = 200/1000 * 10 = 2.0
+        state.adjust_tj(-200.0, 10.0);
+        assert_eq!(state.current_x, 74.0); // 72 - (-200/1000*10) = 72 + 2 = 74
+    }
+
+    #[test]
+    fn text_state_td_upper_sets_tl() {
+        let mut state = TextState::new();
+        state.set_matrix(1.0, 0.0, 0.0, 1.0, 72.0, 700.0);
+        state.apply_td_upper(0.0, -14.0);
+        assert_eq!(state.current_y, 686.0);
+        // TD sets TL = -ty = -(-14) = 14
+        state.apply_t_star();
+        assert_eq!(state.current_y, 672.0);
+    }
+
+    #[test]
+    fn text_state_reset_for_bt() {
+        let mut state = TextState::new();
+        state.set_matrix(0.0, 1.0, -1.0, 0.0, 100.0, 200.0);
+        state.set_tl(14.0);
+        state.reset_for_bt();
+        assert_eq!(state.current_x, 0.0);
+        assert_eq!(state.current_y, 0.0);
+        assert!(!state.is_rotated());
+        // TL should persist across BT per PDF spec
+        state.apply_t_star();
+        assert_eq!(state.current_y, -14.0);
     }
 }
