@@ -259,3 +259,54 @@ fn oracle_multi_page_metadata_parity() {
     let (_, metadata, _) = parser::parse_pdf(&bytes);
     assert_eq!(metadata.page_count, 2);
 }
+
+// ── Hypothesis verification ──
+
+#[test]
+fn verify_h1_segments_have_plausible_coordinates() {
+    // H1: Tm tracking produces plausible absolute coordinates.
+    // PDF pages are typically 612x792 pt (US Letter).
+    let bytes = load_fixture_bytes("simple.pdf");
+    let (segments, _, _) = parser::parse_pdf(&bytes);
+
+    assert!(!segments.is_empty());
+    for seg in &segments {
+        assert!(
+            seg.x >= 0.0 && seg.x <= 1000.0,
+            "segment '{}' has implausible x={}",
+            seg.text,
+            seg.x
+        );
+        assert!(
+            seg.y >= 0.0 && seg.y <= 1000.0,
+            "segment '{}' has implausible y={}",
+            seg.text,
+            seg.y
+        );
+    }
+
+    // Verify non-zero positions exist (not all placeholders)
+    let has_nonzero_y = segments.iter().any(|s| s.y != 0.0);
+    assert!(
+        has_nonzero_y,
+        "simple.pdf segments should have non-zero Y positions after Tm tracking"
+    );
+}
+
+#[test]
+fn verify_h1_multi_heading_has_distinct_y_positions() {
+    // H1: Multiple lines should have distinct Y values.
+    let bytes = load_fixture_bytes("multi-heading.pdf");
+    let (segments, _, _) = parser::parse_pdf(&bytes);
+
+    assert!(!segments.is_empty());
+
+    let mut ys: Vec<i32> = segments.iter().map(|s| (s.y * 10.0) as i32).collect();
+    ys.sort();
+    ys.dedup();
+    assert!(
+        ys.len() >= 2,
+        "multi-heading.pdf should have at least 2 distinct Y positions, got {:?}",
+        ys
+    );
+}
