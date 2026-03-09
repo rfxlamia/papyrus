@@ -26,6 +26,12 @@ pub struct RawTextSegment {
     pub font_size: f32,
     /// 1-based page number.
     pub page_number: usize,
+    /// Cursor X position (user-space units) before this segment was printed.
+    pub x: f32,
+    /// Baseline Y position (user-space units) from the text matrix.
+    pub y: f32,
+    /// True when the text matrix has non-zero rotation (b != 0 or c != 0).
+    pub is_rotated: bool,
 }
 
 /// Load PDF bytes into a lopdf Document, mapping all failures to warnings.
@@ -364,6 +370,9 @@ pub fn extract_text_segments_for_page(
                             font_resource_name: font_res,
                             font_size: font_sz,
                             page_number,
+                            x: 0.0,
+                            y: 0.0,
+                            is_rotated: false,
                         });
                     }
                 }
@@ -414,6 +423,9 @@ pub fn extract_text_segments_for_page(
                             font_resource_name: font_res,
                             font_size: font_sz,
                             page_number,
+                            x: 0.0,
+                            y: 0.0,
+                            is_rotated: false,
                         });
                     }
                 }

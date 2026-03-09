@@ -86,6 +86,9 @@ fn parser_types_are_constructible() {
         font_resource_name: b"F1".to_vec(),
         font_size: 12.0,
         page_number: 1,
+        x: 0.0,
+        y: 0.0,
+        is_rotated: false,
     };
     assert_eq!(segment.text, "Hello");
     assert_eq!(segment.font_resource_name, b"F1");
@@ -110,6 +113,9 @@ fn parser_types_derive_clone_and_debug() {
         font_resource_name: b"F1".to_vec(),
         font_size: 12.0,
         page_number: 1,
+        x: 0.0,
+        y: 0.0,
+        is_rotated: false,
     };
     let cloned = segment.clone();
     assert_eq!(segment, cloned);

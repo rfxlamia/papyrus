@@ -284,6 +284,9 @@ mod tests {
             font_resource_name: b"F1".to_vec(),
             font_size,
             page_number: 1,
+            x: 0.0,
+            y: 0.0,
+            is_rotated: false,
         }
     }
 
@@ -298,6 +301,9 @@ mod tests {
             font_resource_name: font_resource.to_vec(),
             font_size,
             page_number: page,
+            x: 0.0,
+            y: 0.0,
+            is_rotated: false,
         }
     }
 
