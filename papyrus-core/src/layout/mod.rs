@@ -11,10 +11,10 @@ use crate::parser::RawTextSegment;
 /// Segments with `|y1 - y2| < font_size * 0.5` are considered the same line.
 /// Rotated segments are excluded. Lines are sorted Y-descending (top of page
 /// first), segments within each line sorted X-ascending (left to right).
-pub fn group_into_lines<'a>(
-    segments: &'a [RawTextSegment],
+pub fn group_into_lines(
+    segments: &[RawTextSegment],
     body_font_size: f32,
-) -> Vec<Vec<&'a RawTextSegment>> {
+) -> Vec<Vec<&RawTextSegment>> {
     let tolerance = body_font_size * 0.5;
 
     // Filter out rotated segments
@@ -41,8 +41,7 @@ pub fn group_into_lines<'a>(
             current_line.push(seg);
         } else {
             // Sort current line by X before finalizing
-            current_line
-                .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            current_line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
             lines.push(current_line);
             current_line = vec![seg];
             current_y = seg.y;
@@ -56,7 +55,7 @@ pub fn group_into_lines<'a>(
 }
 
 /// Collect rotated segments from a page (excluded from layout pipeline).
-pub fn collect_rotated<'a>(segments: &'a [RawTextSegment]) -> Vec<&'a RawTextSegment> {
+pub fn collect_rotated(segments: &[RawTextSegment]) -> Vec<&RawTextSegment> {
     segments.iter().filter(|s| s.is_rotated).collect()
 }
 
@@ -222,14 +221,21 @@ mod tests {
         ];
         let lines = group_into_lines(&segments, 12.0);
         let median = compute_median_line_height(&lines, 12.0);
-        assert!((median - 14.0).abs() < 0.1, "median line height should be ~14pt, got {}", median);
+        assert!(
+            (median - 14.0).abs() < 0.1,
+            "median line height should be ~14pt, got {}",
+            median
+        );
     }
 
     #[test]
     fn compute_median_line_height_fallback() {
         let lines: Vec<Vec<&RawTextSegment>> = Vec::new();
         let median = compute_median_line_height(&lines, 12.0);
-        assert!((median - 14.4).abs() < 0.1, "fallback should be font_size * 1.2");
+        assert!(
+            (median - 14.4).abs() < 0.1,
+            "fallback should be font_size * 1.2"
+        );
     }
 
     #[test]

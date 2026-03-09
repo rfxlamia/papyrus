@@ -25,9 +25,14 @@ fn single_file_to_output_file() {
     let out = tmp.path().join("out.md");
 
     let mut cmd = Command::cargo_bin("papyrus").unwrap();
-    cmd.args(["convert", fixture_path("simple.pdf").to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .assert()
-        .success();
+    cmd.args([
+        "convert",
+        fixture_path("simple.pdf").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
 
     let markdown = fs::read_to_string(out).unwrap();
     assert!(markdown.contains("Chapter 1"));
@@ -48,12 +53,21 @@ fn batch_mode_writes_multiple_files() {
     let output = tempdir().unwrap();
 
     fs::copy(fixture_path("simple.pdf"), input.path().join("simple.pdf")).unwrap();
-    fs::copy(fixture_path("multi-page.pdf"), input.path().join("multi-page.pdf")).unwrap();
+    fs::copy(
+        fixture_path("multi-page.pdf"),
+        input.path().join("multi-page.pdf"),
+    )
+    .unwrap();
 
     let mut cmd = Command::cargo_bin("papyrus").unwrap();
-    cmd.args(["convert", input.path().to_str().unwrap(), "-o", output.path().to_str().unwrap()])
-        .assert()
-        .success();
+    cmd.args([
+        "convert",
+        input.path().to_str().unwrap(),
+        "-o",
+        output.path().to_str().unwrap(),
+    ])
+    .assert()
+    .success();
 
     assert!(output.path().join("simple.md").exists());
     assert!(output.path().join("multi-page.md").exists());
@@ -81,7 +95,13 @@ fn custom_flags_change_output() {
 
     let mut cmd2 = Command::cargo_bin("papyrus").unwrap();
     let no_bold = cmd2
-        .args(["convert", fixture_path("bold-italic.pdf").to_str().unwrap(), "--no-bold", "--heading-ratio", "2.0"])
+        .args([
+            "convert",
+            fixture_path("bold-italic.pdf").to_str().unwrap(),
+            "--no-bold",
+            "--heading-ratio",
+            "2.0",
+        ])
         .assert()
         .success()
         .get_output()
@@ -111,8 +131,12 @@ fn warning_output_visible_and_quiet_suppresses() {
         .stderr(predicate::str::contains("Warning:"));
 
     let mut cmd2 = Command::cargo_bin("papyrus").unwrap();
-    cmd2.args(["convert", fixture_path("corrupted.pdf").to_str().unwrap(), "--quiet"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Warning:").not());
+    cmd2.args([
+        "convert",
+        fixture_path("corrupted.pdf").to_str().unwrap(),
+        "--quiet",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::contains("Warning:").not());
 }

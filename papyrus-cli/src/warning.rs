@@ -12,13 +12,22 @@ pub fn format_warning(warning: &Warning) -> String {
     let prefix = "Warning:".yellow().to_string();
     match warning {
         Warning::MissingFontMetrics { font_name, page } => {
-            format!("{prefix} Missing font metrics for \"{font_name}\" on {}", format!("page {page}").cyan())
+            format!(
+                "{prefix} Missing font metrics for \"{font_name}\" on {}",
+                format!("page {page}").cyan()
+            )
         }
         Warning::UnreadableTextStream { page, detail } => {
-            format!("{prefix} Unreadable text stream on {} ({detail})", format!("page {page}").cyan())
+            format!(
+                "{prefix} Unreadable text stream on {} ({detail})",
+                format!("page {page}").cyan()
+            )
         }
         Warning::UnsupportedEncoding { encoding, page } => {
-            format!("{prefix} Unsupported encoding \"{encoding}\" on {}", format!("page {page}").cyan())
+            format!(
+                "{prefix} Unsupported encoding \"{encoding}\" on {}",
+                format!("page {page}").cyan()
+            )
         }
         Warning::MalformedPdfObject { detail } => {
             format!("{prefix} Malformed PDF object ({detail})")

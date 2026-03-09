@@ -152,17 +152,38 @@ fn extract_with_config(pdf_bytes: &[u8], config: &DetectorConfig) -> ConversionR
         let (segments, extract_warnings) =
             parser::extract_text_segments_for_page(&doc, page_number, &HashMap::new());
         all_warnings.extend(extract_warnings);
+
+        // Detect image-only pages (no text segments after parsing)
+        if segments.is_empty() {
+            all_warnings.push(Warning::ImageOnlyPage { page: page_number });
+        }
+
+        // Detect and quarantine rotated text
+        let rotated = layout::collect_rotated(&segments);
+        if !rotated.is_empty() {
+            all_warnings.push(Warning::RotatedTextDetected {
+                page: page_number,
+                segment_count: rotated.len(),
+            });
+        }
+
         all_segments.extend(segments);
     }
+
+    // Step 4: Spatial layout — reconstruct lines from position data.
+    // Group segments per page, apply Y-grouping and X-gap analysis,
+    // produce one segment per line with proper text reconstruction.
+    let layout_segments = apply_spatial_layout(&all_segments, &page_fonts_map);
 
     // Build a flat resource-name → FontInfo map for build_document.
     // Since segments carry their page number, we look up the correct font
     // per (page, resource_name) and flatten into a per-segment map.
-    let segment_fonts = build_segment_font_map(&all_segments, &page_fonts_map, &mut all_warnings);
+    let segment_fonts =
+        build_segment_font_map(&layout_segments, &page_fonts_map, &mut all_warnings);
 
-    // Step 4: Detect structure and build AST.
+    // Step 5: Detect structure and build AST.
     let (document, detector_warnings) =
-        build_document(all_segments, &segment_fonts, config, metadata);
+        build_document(layout_segments, &segment_fonts, config, metadata);
     all_warnings.extend(detector_warnings);
 
     ConversionResult {
@@ -208,6 +229,103 @@ fn build_segment_font_map(
                     });
                 }
             }
+        }
+    }
+
+    result
+}
+
+/// Apply spatial layout analysis to transform raw segments into line-based segments.
+///
+/// Groups segments per page by Y-proximity, reconstructs line text with X-gap
+/// word spacing, and inserts paragraph breaks where Y-gaps exceed the threshold.
+/// Rotated segments are quarantined and appended after normal text per page.
+fn apply_spatial_layout(
+    all_segments: &[parser::RawTextSegment],
+    _page_fonts_map: &HashMap<(usize, Vec<u8>), parser::FontInfo>,
+) -> Vec<parser::RawTextSegment> {
+    use detector::compute_body_size;
+
+    if all_segments.is_empty() {
+        return Vec::new();
+    }
+
+    let body_size = compute_body_size(all_segments);
+
+    // Group segments by page number
+    let mut pages: std::collections::BTreeMap<usize, Vec<&parser::RawTextSegment>> =
+        std::collections::BTreeMap::new();
+    for seg in all_segments {
+        pages.entry(seg.page_number).or_default().push(seg);
+    }
+
+    let mut result = Vec::new();
+
+    for (&page_number, page_segments) in &pages {
+        // Collect owned references for layout functions
+        let owned_segs: Vec<parser::RawTextSegment> =
+            page_segments.iter().map(|s| (*s).clone()).collect();
+
+        let lines = layout::group_into_lines(&owned_segs, body_size);
+        let rotated = layout::collect_rotated(&owned_segs);
+
+        if lines.is_empty() && rotated.is_empty() {
+            continue;
+        }
+
+        let median_height = layout::compute_median_line_height(&lines, body_size);
+
+        for (i, line) in lines.iter().enumerate() {
+            // Get the dominant font info from the first segment in the line
+            let first_seg = line[0];
+
+            // Reconstruct text for this line
+            let line_text = layout::reconstruct_line_text(line);
+
+            if line_text.trim().is_empty() {
+                continue;
+            }
+
+            // Detect paragraph break before this line (not before the first line)
+            if i > 0 {
+                let prev_y = lines[i - 1].first().map(|s| s.y).unwrap_or(0.0);
+                let curr_y = line.first().map(|s| s.y).unwrap_or(0.0);
+                if layout::is_paragraph_break(prev_y, curr_y, median_height) {
+                    // Insert an empty paragraph marker segment
+                    result.push(parser::RawTextSegment {
+                        text: String::new(),
+                        font_resource_name: first_seg.font_resource_name.clone(),
+                        font_size: first_seg.font_size,
+                        page_number,
+                        x: first_seg.x,
+                        y: first_seg.y,
+                        is_rotated: false,
+                    });
+                }
+            }
+
+            result.push(parser::RawTextSegment {
+                text: line_text,
+                font_resource_name: first_seg.font_resource_name.clone(),
+                font_size: first_seg.font_size,
+                page_number,
+                x: first_seg.x,
+                y: first_seg.y,
+                is_rotated: false,
+            });
+        }
+
+        // Append quarantined rotated text at end of page
+        for seg in &rotated {
+            result.push(parser::RawTextSegment {
+                text: seg.text.clone(),
+                font_resource_name: seg.font_resource_name.clone(),
+                font_size: seg.font_size,
+                page_number,
+                x: seg.x,
+                y: seg.y,
+                is_rotated: true,
+            });
         }
     }
 

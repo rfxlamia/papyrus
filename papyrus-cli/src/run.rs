@@ -1,5 +1,7 @@
 use crate::cli::{Cli, Commands};
-use crate::convert::{classify_input, convert_directory, convert_file, convert_pipe, ConvertConfig, InputKind};
+use crate::convert::{
+    classify_input, convert_directory, convert_file, convert_pipe, ConvertConfig, InputKind,
+};
 use crate::warning::render_warning_lines;
 use std::io::{self, Write};
 
@@ -49,7 +51,9 @@ pub fn run_cli(cli: Cli) -> i32 {
                                 let mut stdout = io::stdout().lock();
                                 match convert_pipe(&mut file, &mut stdout, cfg) {
                                     Ok(summary) => {
-                                        for line in render_warning_lines(&summary.warnings, cfg.quiet) {
+                                        for line in
+                                            render_warning_lines(&summary.warnings, cfg.quiet)
+                                        {
                                             eprintln!("{line}");
                                         }
                                         0
@@ -84,7 +88,9 @@ pub fn run_cli(cli: Cli) -> i32 {
                     match convert_directory(&path, output.as_deref(), cfg) {
                         Ok(summary) => {
                             for (file, warning) in &summary.warnings {
-                                for line in render_warning_lines(std::slice::from_ref(warning), cfg.quiet) {
+                                for line in
+                                    render_warning_lines(std::slice::from_ref(warning), cfg.quiet)
+                                {
                                     eprintln!("{}: {}", file.display(), line);
                                 }
                             }
@@ -108,7 +114,7 @@ pub fn run_cli(cli: Cli) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::FATAL_IO_EXIT_CODE;
-    
+
     #[test]
     fn fatal_io_uses_exit_code_1() {
         assert_eq!(FATAL_IO_EXIT_CODE, 1);

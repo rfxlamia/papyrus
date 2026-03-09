@@ -181,7 +181,7 @@ pub fn resolve_fonts_for_page(
         // /FontSize key, so we leave this as None. It may be populated by future
         // heuristics if needed.
 
-        let (font_weight, italic_angle) = extract_font_descriptor_metrics(doc, &font_dict);
+        let (font_weight, italic_angle) = extract_font_descriptor_metrics(doc, font_dict);
 
         fonts.insert(
             resource_name,

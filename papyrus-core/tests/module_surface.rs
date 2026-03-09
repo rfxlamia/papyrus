@@ -52,7 +52,9 @@ fn module_surfaces_are_linked() {
             }
             papyrus_core::ast::Warning::MissingFontMetrics { .. }
             | papyrus_core::ast::Warning::UnreadableTextStream { .. }
-            | papyrus_core::ast::Warning::UnsupportedEncoding { .. } => {}
+            | papyrus_core::ast::Warning::UnsupportedEncoding { .. }
+            | papyrus_core::ast::Warning::RotatedTextDetected { .. }
+            | papyrus_core::ast::Warning::ImageOnlyPage { .. } => {}
         }
     }
 }

@@ -1,8 +1,8 @@
-use std::io;
-use std::path::{Path, PathBuf};
-use std::io::{Read, Write};
-use papyrus_core::Papyrus;
 use indicatif::{ProgressBar, ProgressStyle};
+use papyrus_core::Papyrus;
+use std::io;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ConvertConfig {
@@ -38,7 +38,11 @@ pub struct BatchSummary {
 
 impl BatchSummary {
     pub fn exit_code(&self) -> i32 {
-        if self.converted > 0 { 0 } else { 1 }
+        if self.converted > 0 {
+            0
+        } else {
+            1
+        }
     }
 }
 
@@ -164,7 +168,11 @@ pub fn discover_pdf_files(input_dir: &Path) -> io::Result<Vec<PathBuf>> {
 ///
 /// # Errors
 /// Returns `io::Error` if the file stem cannot be determined.
-pub fn target_path(input_root: &Path, input_file: &Path, output: Option<&Path>) -> io::Result<PathBuf> {
+pub fn target_path(
+    input_root: &Path,
+    input_file: &Path,
+    output: Option<&Path>,
+) -> io::Result<PathBuf> {
     let stem = input_file
         .file_stem()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing file stem"))?;
@@ -203,7 +211,7 @@ pub fn convert_directory(
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template("[{pos}/{len}] Converting {msg}...")
-            .expect("valid progress bar template")
+            .expect("valid progress bar template"),
     );
 
     let mut summary = BatchSummary::default();
@@ -294,8 +302,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let out = tmp.path().join("simple.md");
 
-        let result = convert_file(&fixture, Some(&out), ConvertConfig::from_flags(1.2, false, false, false))
-            .unwrap();
+        let result = convert_file(
+            &fixture,
+            Some(&out),
+            ConvertConfig::from_flags(1.2, false, false, false),
+        )
+        .unwrap();
 
         assert!(result.succeeded);
         let markdown = std::fs::read_to_string(&out).unwrap();
@@ -348,7 +360,11 @@ mod tests {
         let input = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
 
-        std::fs::copy(workspace_fixture("simple.pdf"), input.path().join("simple.pdf")).unwrap();
+        std::fs::copy(
+            workspace_fixture("simple.pdf"),
+            input.path().join("simple.pdf"),
+        )
+        .unwrap();
         std::fs::write(input.path().join("bad.pdf"), b"not a real pdf").unwrap();
 
         let summary = convert_directory(

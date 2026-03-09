@@ -39,6 +39,8 @@ pub enum Warning {
     UnreadableTextStream { page: usize, detail: String },
     UnsupportedEncoding { encoding: String, page: usize },
     MalformedPdfObject { detail: String },
+    RotatedTextDetected { page: usize, segment_count: usize },
+    ImageOnlyPage { page: usize },
 }
 
 impl Document {
