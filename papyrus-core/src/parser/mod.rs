@@ -435,6 +435,7 @@ pub fn extract_text_segments_for_page(
     let mut current_font_size: Option<f32> = None;
     let mut tf_set_in_text_object = false;
     let mut warned_no_tf = false;
+    let mut text_state = TextState::new();
 
     for op in content.operations.iter() {
         match op.operator.as_str() {
@@ -444,6 +445,7 @@ pub fn extract_text_segments_for_page(
                 current_font_size = None;
                 tf_set_in_text_object = false;
                 warned_no_tf = false;
+                text_state.reset_for_bt();
             }
             "ET" => {
                 // End text object — reset state
@@ -451,6 +453,45 @@ pub fn extract_text_segments_for_page(
                 current_font_size = None;
                 tf_set_in_text_object = false;
                 warned_no_tf = false;
+            }
+            "Tm" => {
+                // Set text matrix: operands [a b c d e f]
+                if op.operands.len() >= 6 {
+                    let vals: Vec<f32> = op.operands.iter().filter_map(extract_number).collect();
+                    if vals.len() >= 6 {
+                        text_state.set_matrix(vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]);
+                    }
+                }
+            }
+            "Td" => {
+                // Text position offset: operands [tx ty]
+                if op.operands.len() >= 2 {
+                    if let (Some(tx), Some(ty)) = (
+                        extract_number(&op.operands[0]),
+                        extract_number(&op.operands[1]),
+                    ) {
+                        text_state.apply_td(tx, ty);
+                    }
+                }
+            }
+            "TD" => {
+                // Text position offset + set leading: operands [tx ty]
+                if op.operands.len() >= 2 {
+                    if let (Some(tx), Some(ty)) = (
+                        extract_number(&op.operands[0]),
+                        extract_number(&op.operands[1]),
+                    ) {
+                        text_state.apply_td_upper(tx, ty);
+                    }
+                }
+            }
+            "T*" => {
+                text_state.apply_t_star();
+            }
+            "TL" => {
+                if let Some(tl) = op.operands.first().and_then(extract_number) {
+                    text_state.set_tl(tl);
+                }
             }
             "Tf" => {
                 // Set font: operands are [Name, Number]
@@ -477,67 +518,81 @@ pub fn extract_text_segments_for_page(
                             page_number,
                             &mut warnings,
                         );
+                        let seg_x = text_state.current_x;
+                        let seg_y = text_state.current_y;
+                        let rotated = text_state.is_rotated();
+                        let width = estimate_string_width(&text, font_sz);
+                        text_state.advance_x(width);
                         segments.push(RawTextSegment {
                             text,
                             font_resource_name: font_res,
                             font_size: font_sz,
                             page_number,
-                            x: 0.0,
-                            y: 0.0,
-                            is_rotated: false,
+                            x: seg_x,
+                            y: seg_y,
+                            is_rotated: rotated,
                         });
                     }
                 }
             }
             "TJ" => {
-                // Show array of strings/numbers: operand is [Array]
-                // In PDF, TJ arrays contain strings (text) and numbers (positioning adjustments).
-                // Large negative numbers typically represent word spacing.
+                // Show array of strings/numbers with position-aware tracking.
+                // Each string element produces a segment with its own X position.
+                // Number elements adjust the X cursor (kerning/word spacing).
                 if let Some(lopdf::Object::Array(arr)) = op.operands.first() {
+                    let (font_res, font_sz) = get_text_state_or_default(
+                        &current_font_resource,
+                        current_font_size,
+                        tf_set_in_text_object,
+                        &mut warned_no_tf,
+                        page_number,
+                        &mut warnings,
+                    );
+                    let rotated = text_state.is_rotated();
+
+                    // Collect all string elements with their starting X positions
+                    // into a single segment per TJ call, but use position data
+                    // to handle spacing correctly.
                     let mut combined = String::new();
-                    let mut prev_was_string = false;
-                    let mut needs_space = false;
+                    let mut seg_start_x = text_state.current_x;
+                    let mut first_string = true;
 
                     for item in arr {
                         if let Some(bytes) = extract_string_bytes(item) {
                             let text = decode_pdf_string(&bytes);
-                            // Add space if flagged by a previous large negative adjustment
-                            if needs_space
-                                && !combined.is_empty()
-                                && !combined.ends_with(char::is_whitespace)
-                                && !text.starts_with(char::is_whitespace)
-                            {
-                                combined.push(' ');
+                            if first_string {
+                                seg_start_x = text_state.current_x;
+                                first_string = false;
                             }
                             combined.push_str(&text);
-                            prev_was_string = true;
-                            needs_space = false;
+                            let width = estimate_string_width(&text, font_sz);
+                            text_state.advance_x(width);
                         } else if let Some(num) = extract_number(item) {
-                            // Negative numbers move the text position backward (creating space).
-                            // A threshold of -100 is a heuristic: values more negative than this
-                            // typically represent inter-word spacing rather than kerning.
-                            if prev_was_string && num < -100.0 {
-                                needs_space = true;
+                            // TJ number: adjust cursor position.
+                            // Large negative = word space; small = kerning.
+                            text_state.adjust_tj(num, font_sz);
+                            // If displacement is large enough to be a word space,
+                            // insert a space into the combined string.
+                            let displacement_pts = (num.abs() / 1000.0) * font_sz;
+                            let space_threshold = font_sz * 0.3 * 0.8;
+                            if num < 0.0
+                                && displacement_pts > space_threshold
+                                && !combined.is_empty()
+                                && !combined.ends_with(char::is_whitespace)
+                            {
+                                combined.push(' ');
                             }
                         }
                     }
                     if !combined.is_empty() {
-                        let (font_res, font_sz) = get_text_state_or_default(
-                            &current_font_resource,
-                            current_font_size,
-                            tf_set_in_text_object,
-                            &mut warned_no_tf,
-                            page_number,
-                            &mut warnings,
-                        );
                         segments.push(RawTextSegment {
                             text: combined,
                             font_resource_name: font_res,
                             font_size: font_sz,
                             page_number,
-                            x: 0.0,
-                            y: 0.0,
-                            is_rotated: false,
+                            x: seg_start_x,
+                            y: text_state.current_y,
+                            is_rotated: rotated,
                         });
                     }
                 }
