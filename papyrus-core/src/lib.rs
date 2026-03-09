@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod detector;
+pub mod layout;
 pub mod parser;
 pub mod renderer;
 
