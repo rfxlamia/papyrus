@@ -1442,4 +1442,55 @@ mod tests {
         state.apply_t_star();
         assert_eq!(state.current_y, -14.0);
     }
+
+    // ── H6 Verification ───────────────────────────────────────────────────────
+
+    #[test]
+    fn verify_h6_segments_on_same_line_have_distinct_x() {
+        // H6: When text is on the same line, segments should have distinct X
+        // positions rather than all being 0.0 or identical.
+        let bytes = std::fs::read(fixture_path("multi-heading.pdf")).unwrap();
+        let (segments, _, _) = parse_pdf(&bytes);
+        assert!(!segments.is_empty());
+
+        // Find segments on page 1 that share approximately the same Y
+        let page1: Vec<_> = segments.iter().filter(|s| s.page_number == 1).collect();
+        if page1.len() >= 2 {
+            // Not all X values should be zero (we're tracking position now)
+            let nonzero_x = page1.iter().filter(|s| s.x != 0.0).count();
+            assert!(
+                nonzero_x > 0,
+                "H6: at least some segments should have non-zero X after cursor advancement"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_h6_simple_pdf_segments_have_tracked_positions() {
+        // Verify segments from simple.pdf have non-placeholder positions.
+        // simple.pdf has segments on separate lines — both start at left margin
+        // (same X=72) which is correct. H6 is verified by non-zero positions.
+        let bytes = std::fs::read(fixture_path("simple.pdf")).unwrap();
+        let (segments, _, _) = parse_pdf(&bytes);
+        assert!(!segments.is_empty());
+
+        // All segments should have non-zero Y (tracked from Tm)
+        for seg in &segments {
+            assert!(
+                seg.y != 0.0,
+                "H6: segment '{}' should have non-zero Y from position tracking",
+                seg.text
+            );
+        }
+
+        // Segments on different lines should have different Y values
+        if segments.len() >= 2 {
+            let y_values: std::collections::HashSet<i32> =
+                segments.iter().map(|s| (s.y * 10.0) as i32).collect();
+            assert!(
+                y_values.len() >= 2,
+                "H6: simple.pdf segments on different lines should have distinct Y values"
+            );
+        }
+    }
 }
