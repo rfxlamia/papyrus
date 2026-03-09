@@ -4,6 +4,7 @@ Thank you for your interest in contributing to Papyrus! This document provides t
 
 ## Table of Contents
 
+- [AI-Assisted Contributions](#ai-assisted-contributions)
 - [Development Setup](#development-setup)
 - [Architecture Overview](#architecture-overview)
 - [Project Philosophy](#project-philosophy)
@@ -11,6 +12,10 @@ Thank you for your interest in contributing to Papyrus! This document provides t
 - [Code Standards](#code-standards)
 - [Testing](#testing)
 - [Submitting Changes](#submitting-changes)
+
+## AI-Assisted Contributions
+
+If you use AI coding agents or editor assistants when contributing, read [AGENTS.md](./AGENTS.md) before making changes. It contains repository-specific guidance for project structure, verification commands, and contribution expectations, and is intended to supplement this document rather than replace it.
 
 ## Development Setup
 
