@@ -32,6 +32,18 @@ pub fn format_warning(warning: &Warning) -> String {
         Warning::MalformedPdfObject { detail } => {
             format!("{prefix} Malformed PDF object ({detail})")
         }
+        Warning::RotatedTextDetected { page, segment_count } => {
+            format!(
+                "{prefix} {segment_count} rotated text segment(s) on {}",
+                format!("page {page}").cyan()
+            )
+        }
+        Warning::ImageOnlyPage { page } => {
+            format!(
+                "{prefix} Image-only page detected: {}",
+                format!("page {page}").cyan()
+            )
+        }
     }
 }
 
@@ -73,5 +85,28 @@ mod tests {
         }];
         let lines = render_warning_lines(&warnings, true);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn formats_rotated_text_detected_warning() {
+        let line = format_warning(&Warning::RotatedTextDetected {
+            page: 5,
+            segment_count: 7,
+        });
+        assert!(line.contains("Warning:"));
+        assert!(line.contains("7 rotated text segment(s)"));
+        assert!(line.contains("page 5"));
+        // Ensure the page text is colored (cyan) via ANSI escape sequence.
+        assert!(line.contains("\u{1b}[36m"));
+    }
+
+    #[test]
+    fn formats_image_only_page_warning() {
+        let line = format_warning(&Warning::ImageOnlyPage { page: 8 });
+        assert!(line.contains("Warning:"));
+        assert!(line.contains("Image-only page detected:"));
+        assert!(line.contains("page 8"));
+        // Ensure the page text is colored (cyan) via ANSI escape sequence.
+        assert!(line.contains("\u{1b}[36m"));
     }
 }

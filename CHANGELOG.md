@@ -4,7 +4,7 @@ All notable changes to Papyrus are documented here.
 
 ---
 
-## [Unreleased] — v0.1.1
+## [0.1.1] — 2026-03-14
 
 ### Added
 
