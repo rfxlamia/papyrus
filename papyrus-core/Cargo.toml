@@ -1,6 +1,6 @@
 [package]
 name = "papyrus-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["rfxlamia"]
 description = "PDF-to-Markdown conversion engine with smart heading detection, bold/italic text extraction, and CommonMark output. Pure Rust, best-effort parsing for corrupted PDFs."

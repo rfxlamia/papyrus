@@ -32,6 +32,18 @@ pub fn format_warning(warning: &Warning) -> String {
         Warning::MalformedPdfObject { detail } => {
             format!("{prefix} Malformed PDF object ({detail})")
         }
+        Warning::RotatedTextDetected { page, segment_count } => {
+            format!(
+                "{prefix} {segment_count} rotated text segment(s) on {}",
+                format!("page {page}").cyan()
+            )
+        }
+        Warning::ImageOnlyPage { page } => {
+            format!(
+                "{prefix} Image-only page detected: {}",
+                format!("page {page}").cyan()
+            )
+        }
     }
 }
 
